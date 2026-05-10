@@ -10,6 +10,7 @@ class ThinkingLevel(IntEnum):
     LOW = 1
     MEDIUM = 2
     HIGH = 3
+    MINIMAL = 4
 
 
 @dataclass(frozen=True)
@@ -154,6 +155,15 @@ class AistudioGenerationConfig:
     def request_flag(self, value):
         self._ensure_len(18)
         self.values[17] = value
+
+    @property
+    def output_resolution(self):
+        return self.values[26] if len(self.values) > 26 else None
+
+    @output_resolution.setter
+    def output_resolution(self, value):
+        self._ensure_len(27)
+        self.values[26] = value
 
     def clear_gemma_thinking_budget(self):
         if len(self.values) > 16:

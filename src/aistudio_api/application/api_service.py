@@ -224,7 +224,7 @@ async def handle_image_generation(req: ImageRequest, client: AIStudioClient):
                     await _try_switch_account()
             try:
                 logger.info("Image: model=%s, prompt=%s..., attempt=%d", req.model, req.prompt[:50], attempt + 1)
-                output = await client.generate_image(prompt=req.prompt, model=req.model)
+                output = await client.generate_image(prompt=req.prompt, model=req.model, size=req.size, google_search=req.google_search)
 
                 data = []
                 for img in output.images:

@@ -4,7 +4,7 @@ function app(){return{
   stats:{},rotationMode:'round_robin',rotCfg:{mode:'round_robin',cooldown:60},
   accounts:[],rotationAccounts:{},activeId:'',activeAccount:{},
   models:[],model:'',
-  msgs:[],draft:'',busy:false,
+  msgs:[],draft:'',selectedImages:[],busy:false,
   cfg:{thinking:'off',search:'off',stream:'on',temperature:1.0,topP:1.0,maxTokens:8192,safety:'on'},
   toast:{show:false,msg:'',t:null},
 
@@ -13,6 +13,13 @@ function app(){return{
   showToast(m){this.toast.msg=m;this.toast.show=true;if(this.toast.t)clearTimeout(this.toast.t);this.toast.t=setTimeout(()=>this.toast.show=false,3000)},
   toggleSelect(k,e){e.stopPropagation();this.openSelect=this.openSelect===k?null:k},
   selectOpt(k,model,val){this[model]=val;this.openSelect=null},
+  renderMarkdown(text){
+    if(!text) return '';
+    if(typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined'){
+      return DOMPurify.sanitize(marked.parse(text));
+    }
+    return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+  },
 
   async loadModels(){try{const r=await fetch('/v1/models');const d=await r.json();this.models=d.data||[];if(!this.model&&this.models.length)this.model=this.models[0].id}catch(e){}},
   async loadStats(){try{const r=await fetch('/stats');const d=await r.json();this.stats=d.models||{}}catch(e){}},
@@ -31,9 +38,42 @@ function app(){return{
   resizeTa(){const el=this.$refs.ta;el.style.height='auto';el.style.height=Math.min(el.scrollHeight,200)+'px'},
   scrollDown(){setTimeout(()=>{const el=document.getElementById('chat-scroll');if(el)el.scrollTop=el.scrollHeight},50)},
 
-  async send(){const t=this.draft.trim();if(!t||this.busy||!this.model)return;
-    this.msgs.push({role:'user',content:t});this.draft='';this.busy=true;this.resizeTa();this.scrollDown();
-    const body={model:this.model,messages:this.msgs.map(m=>({role:m.role,content:m.content}))};
+  async handleImageUpload(e){
+    const files=Array.from(e.target.files);
+    for(const f of files){
+      if(!f.type.startsWith('image/'))continue;
+      const reader=new FileReader();
+      reader.onload=(ev)=>this.selectedImages.push(ev.target.result);
+      reader.readAsDataURL(f);
+    }
+    e.target.value='';
+  },
+  removeImage(idx){this.selectedImages.splice(idx,1)},
+
+  async send(){const t=this.draft.trim();const imgs=[...this.selectedImages];if(!t && !imgs.length)return;if(this.busy||!this.model)return;
+    this.msgs.push({role:'user',content:t,images:imgs});this.draft='';this.selectedImages=[];this.busy=true;this.resizeTa();this.scrollDown();
+
+    // 生图模型走 /v1/images/generations
+    if(this.model.includes('image')){
+      try{const r=await fetch('/v1/images/generations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:this.model,prompt:t,size:'1024x1024'})});
+        if(!r.ok){let e=r.statusText;try{const d=await r.json();if(d.detail)e=JSON.stringify(d.detail)}catch(x){};this.msgs.push({role:'assistant',content:'',error:`Error ${r.status}: ${e}`})}
+        else{const d=await r.json();const imgs=d.data||[];let content='';imgs.forEach(img=>{if(img.b64_json)content+=`![image](data:image/png;base64,${img.b64_json})\n`;else if(img.url)content+=`![image](${img.url})\n`;if(img.revised_prompt)content+=img.revised_prompt+'\n'});
+          this.msgs.push({role:'assistant',content:content||'(无响应内容)',showThinking:false})}}
+      catch(e){this.msgs.push({role:'assistant',content:'',error:e.message})}
+      finally{this.busy=false;this.scrollDown()}
+      return;
+    }
+
+    const messages=this.msgs.map(m=>{
+      if(m.images && m.images.length){
+        const parts=[{type:'text',text:m.content||''}];
+        m.images.forEach(img=>parts.push({type:'image_url',image_url:{url:img}}));
+        return {role:m.role,content:parts};
+      }
+      return {role:m.role,content:m.content};
+    });
+
+    const body={model:this.model,messages};
     if(this.cfg.temperature!==1) body.temperature=this.cfg.temperature;
     if(this.cfg.topP!==1) body.top_p=this.cfg.topP;
     if(this.cfg.maxTokens!==8192) body.max_tokens=this.cfg.maxTokens;

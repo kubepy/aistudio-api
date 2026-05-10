@@ -13,7 +13,7 @@ import httpx
 from aistudio_api.config import DEFAULT_IMAGE_MODEL
 from aistudio_api.domain.errors import RequestError
 from aistudio_api.infrastructure.gateway.request_rewriter import TOOLS_TEMPLATES
-from aistudio_api.infrastructure.gateway.wire_types import AistudioContent, AistudioPart
+from aistudio_api.infrastructure.gateway.wire_types import AistudioContent, AistudioPart, AistudioThinkingConfig, ThinkingLevel
 
 
 SCHEMA_TYPE_CODES = {
@@ -293,10 +293,20 @@ def normalize_gemini_request(req, requested_model: str, tmp_dir: str = "/tmp") -
     if tools is None and any(m in model for m in ("gemma-4-26b-a4b-it", "gemma-4-31b-it")):
         tools = [TOOLS_TEMPLATES["google_search"]]
 
+    is_image_model = "image" in model.lower()
+
     generation_config = req.generationConfig
     generation_config_overrides = None
+    if is_image_model:
+        # 生图模型需要特殊配置
+        generation_config_overrides = {
+            "response_mime_type": None,
+            "media_resolution": [2, 1],
+            "thinking_config": AistudioThinkingConfig(level=ThinkingLevel.MINIMAL, mode=1).to_wire(),
+        }
     if generation_config is not None:
-        generation_config_overrides = {}
+        if generation_config_overrides is None:
+            generation_config_overrides = {}
         if generation_config.stopSequences is not None:
             generation_config_overrides["stop_sequences"] = generation_config.stopSequences
         if generation_config.maxOutputTokens is not None:

@@ -71,7 +71,15 @@ class AistudioWireCodec:
         body[self.TIMEZONE_INDEX] = request.location
 
         is_image_model = "image" in request.model.lower()
-        if not is_image_model:
+        if is_image_model:
+            gc = body[self.GENERATION_CONFIG_INDEX]
+            if isinstance(gc, list):
+                # These fields come from text model template but image model expects null
+                for idx in [7, 13, 17]:
+                    if idx < len(gc):
+                        gc[idx] = None
+            body[self.SAFETY_INDEX] = None
+        else:
             if request.tools:
                 self._ensure_len(body, self.TIMEZONE_INDEX + 1)
                 body[self.TIMEZONE_INDEX] = request.location or [[None, None, "Asia/Shanghai"]]

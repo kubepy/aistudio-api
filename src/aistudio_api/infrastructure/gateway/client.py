@@ -264,11 +264,37 @@ class AIStudioClient:
         output.model = model
         return output
 
+    @staticmethod
+    def _convert_size_to_resolution(size: str) -> list:
+        """将 OpenAI 格式的 size 转换为 AI Studio 格式的 resolution."""
+        size_map = {
+            # 1:1
+            "512x512": ["1:1", "512"],
+            "1024x1024": ["1:1", "1K"],
+            "2048x2048": ["1:1", "2K"],
+            "4096x4096": ["1:1", "4K"],
+            # 16:9
+            "1792x1024": ["16:9", "1K"],
+            # 9:16
+            "1024x1792": ["9:16", "1K"],
+            # 4:3
+            "1365x1024": ["4:3", "1K"],
+            # 3:4
+            "1024x1365": ["3:4", "1K"],
+            # 3:2
+            "1536x1024": ["3:2", "1K"],
+            # 2:3
+            "1024x1536": ["2:3", "1K"],
+        }
+        return size_map.get(size, ["1:1", "1K"])
+
     async def generate_image(
         self,
         prompt: str,
         model: str = DEFAULT_IMAGE_MODEL,
         save_path: Optional[str] = None,
+        size: str = "1024x1024",
+        google_search: bool = False,
     ) -> ModelOutput:
         logger.info("生图请求: %r", f"{prompt[:20]}...")
         captured = await self.capture_request(prompt, model=model)

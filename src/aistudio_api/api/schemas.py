@@ -52,6 +52,7 @@ class ImageRequest(BaseModel):
     model: str = DEFAULT_IMAGE_MODEL
     n: int = 1
     size: str = "1024x1024"
+    google_search: bool = False
 
 
 class ImageUrl(BaseModel):
