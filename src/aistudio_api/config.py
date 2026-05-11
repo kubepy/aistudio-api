@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -34,6 +35,36 @@ def discover_auth_file() -> str | None:
     return None
 
 
+def discover_proxy_url() -> str | None:
+    return (
+        os.getenv("AISTUDIO_PROXY")
+        or os.getenv("HTTPS_PROXY")
+        or os.getenv("https_proxy")
+        or os.getenv("HTTP_PROXY")
+        or os.getenv("http_proxy")
+    )
+
+
+def build_camoufox_proxy(proxy_url: str | None) -> dict[str, str] | None:
+    if not proxy_url:
+        return None
+
+    parsed = urlparse(proxy_url)
+    if not parsed.scheme or not parsed.hostname:
+        return None
+
+    proxy: dict[str, str] = {
+        "server": f"{parsed.scheme}://{parsed.hostname}",
+    }
+    if parsed.port:
+        proxy["server"] += f":{parsed.port}"
+    if parsed.username:
+        proxy["username"] = parsed.username
+    if parsed.password:
+        proxy["password"] = parsed.password
+    return proxy
+
+
 @dataclass(slots=True)
 class Settings:
     port: int = int(os.getenv("AISTUDIO_PORT", "8080"))
@@ -42,6 +73,7 @@ class Settings:
     tmp_dir: str = os.getenv("AISTUDIO_TMP_DIR", "/tmp")
     camoufox_headless: bool = os.getenv("AISTUDIO_CAMOUFOX_HEADLESS", "1") not in ("0", "false", "False")
     camoufox_python: str | None = os.getenv("AISTUDIO_CAMOUFOX_PYTHON")
+    proxy_url: str | None = discover_proxy_url()
     timeout_replay: int = int(os.getenv("AISTUDIO_TIMEOUT_REPLAY", "120"))
     timeout_stream: int = int(os.getenv("AISTUDIO_TIMEOUT_STREAM", "120"))
     timeout_capture: int = int(os.getenv("AISTUDIO_TIMEOUT_CAPTURE", "30"))

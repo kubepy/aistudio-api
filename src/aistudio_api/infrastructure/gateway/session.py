@@ -408,7 +408,13 @@ class BrowserSession:
         from camoufox.sync_api import Camoufox
 
         self._close_sync()
-        self._cf = Camoufox(headless=settings.camoufox_headless, main_world_eval=True)
+        from aistudio_api.config import build_camoufox_proxy
+
+        self._cf = Camoufox(
+            headless=settings.camoufox_headless,
+            main_world_eval=True,
+            proxy=build_camoufox_proxy(settings.proxy_url),
+        )
         self._browser = self._cf.__enter__()
         self._ctx = self._new_context_sync()
         self._hook_page = self._ctx.pages[0] if self._ctx.pages else self._ctx.new_page()

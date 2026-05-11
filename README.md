@@ -140,6 +140,7 @@ python3 main.py client "画一只猫" --image --save cat.png
 |------|--------|------|
 | `AISTUDIO_PORT` | `8080` | API 服务端口 |
 | `AISTUDIO_CAMOUFOX_PORT` | `9222` | Camoufox 调试端口 |
+| `AISTUDIO_PROXY` | 空 | 浏览器代理地址 |
 | `AISTUDIO_DEFAULT_TEXT_MODEL` | `gemma-4-31b-it` | 默认对话模型 |
 | `AISTUDIO_DEFAULT_IMAGE_MODEL` | `gemini-3.1-flash-image-preview` | 默认图片模型 |
 | `AISTUDIO_CAMOUFOX_HEADLESS` | `1` | 无头模式运行浏览器 |

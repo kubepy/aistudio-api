@@ -14,7 +14,7 @@ import argparse
 import base64
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import orjson
 from camoufox.server import LAUNCH_SCRIPT, get_nodejs, to_camel_case_dict
@@ -29,8 +29,8 @@ def _prune_none(value: Any) -> Any:
     return value
 
 
-def launch_camoufox_server(*, port: int, headless: bool):
-    cfg = launch_options(port=port, headless=headless, main_world_eval=True)
+def launch_camoufox_server(*, port: int, headless: bool, proxy: Optional[dict[str, str]] = None):
+    cfg = launch_options(port=port, headless=headless, main_world_eval=True, proxy=proxy)
     cfg = _prune_none(cfg)
     nodejs = get_nodejs()
     data = orjson.dumps(to_camel_case_dict(cfg))
@@ -49,11 +49,17 @@ def launch_camoufox_server(*, port: int, headless: bool):
 
 
 def main():
+    from aistudio_api.config import build_camoufox_proxy, settings
+
     parser = argparse.ArgumentParser(description="Launch Camoufox server with sanitized config")
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--headless", action="store_true")
     args = parser.parse_args()
-    launch_camoufox_server(port=args.port, headless=args.headless)
+    launch_camoufox_server(
+        port=args.port,
+        headless=args.headless,
+        proxy=build_camoufox_proxy(settings.proxy_url),
+    )
 
 
 if __name__ == "__main__":

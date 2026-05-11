@@ -33,7 +33,7 @@ class RequestReplayService:
 
             import aiohttp
 
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(trust_env=True) as session:
                 async with session.post(
                     captured.url,
                     data=body,
