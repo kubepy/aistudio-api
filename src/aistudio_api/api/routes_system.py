@@ -6,18 +6,19 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 
 from aistudio_api.application.api_service import health_response, stats_response
+from aistudio_api.api.response_models import HealthResponse, StatsResponse
 from aistudio_api.api.dependencies import get_runtime_state
 
 public_router = APIRouter()
 protected_router = APIRouter()
 
 
-@public_router.get("/health")
+@public_router.get("/health", response_model=HealthResponse)
 async def health():
     return health_response()
 
 
-@protected_router.get("/stats")
+@protected_router.get("/stats", response_model=StatsResponse)
 async def stats():
     return stats_response()
 

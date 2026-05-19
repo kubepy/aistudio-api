@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
-from aistudio_api.application.api_service import handle_chat, handle_image_generation
+from aistudio_api.application.api_service import handle_chat, handle_image_edit, handle_image_generation
+from aistudio_api.api.response_models import (
+    ImageGenerationResponse,
+    ModelCardResponse,
+    ModelListResponse,
+    OpenAIChatCompletionResponse,
+)
 from aistudio_api.infrastructure.gateway.client import AIStudioClient
 
 from .dependencies import get_client
@@ -54,30 +60,51 @@ MODELS = [
     # {"id": "lyria-3-clip-preview", "object": "model", "created": 1700000000, "owned_by": "google"},
     # # Robotics
     # {"id": "gemini-robotics-er-1.6-preview", "object": "model", "created": 1700000000, "owned_by": "google"},
-]
+] 
+MODELS = [ModelCardResponse(**model) for model in MODELS]
 
-MODEL_IDS = {m["id"] for m in MODELS}
+MODEL_IDS = {m.id for m in MODELS}
 
 
-@router.get("/v1/models")
+@router.get("/v1/models", response_model=ModelListResponse)
 async def list_models():
-    return {"object": "list", "data": MODELS}
+    return ModelListResponse(data=MODELS)
 
 
-@router.get("/v1/models/{model_id:path}")
+@router.get("/v1/models/{model_id:path}", response_model=ModelCardResponse)
 async def get_model(model_id: str):
     for m in MODELS:
-        if m["id"] == model_id:
+        if m.id == model_id:
             return m
     raise HTTPException(status_code=404, detail={"message": f"Model '{model_id}' not found", "type": "invalid_request_error"})
 
 
-@router.post("/v1/chat/completions")
+@router.post("/v1/chat/completions", response_model=OpenAIChatCompletionResponse)
 async def chat_completions(req: ChatRequest, client: AIStudioClient = Depends(get_client)):
     return await handle_chat(req, client)
 
 
-@router.post("/v1/images/generations")
+@router.post("/v1/images/generations", response_model=ImageGenerationResponse)
 async def image_generations(req: ImageRequest, client: AIStudioClient = Depends(get_client)):
     return await handle_image_generation(req, client)
 
+
+@router.post("/v1/images/edits", response_model=ImageGenerationResponse)
+async def image_edits(
+    prompt: str = Form(...),
+    image: list[UploadFile] | None = File(None),
+    mask: UploadFile | None = File(None),
+    model: str = Form("gemini-3.1-flash-image-preview"),
+    n: int = Form(1),
+    size: str = Form("1024x1024"),
+    client: AIStudioClient = Depends(get_client),
+):
+    return await handle_image_edit(
+        prompt=prompt,
+        image_files=image or [],
+        mask_file=mask,
+        model=model,
+        n=n,
+        size=size,
+        client=client,
+    )

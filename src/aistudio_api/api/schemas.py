@@ -1,11 +1,8 @@
 """HTTP request schemas."""
-
 from __future__ import annotations
 
 from typing import Any, Optional
-
 from pydantic import BaseModel
-
 from aistudio_api.config import DEFAULT_IMAGE_MODEL, DEFAULT_TEXT_MODEL
 
 

@@ -24,22 +24,32 @@ _snapshot_cache = SnapshotCache()
 
 
 class AIStudioClient:
-    def __init__(self, port: int = DEFAULT_BROWSER_PORT, use_pure_http: bool = False):
+    IMAGE_SIZE_TO_OUTPUT_RESOLUTION = {
+        # 1:1
+        "512x512": ["1:1", "512"],
+        "1024x1024": ["1:1", "1K"],
+        "2048x2048": ["1:1", "2K"],
+        "4096x4096": ["1:1", "4K"],
+        # 16:9
+        "1792x1024": ["16:9", "1K"],
+        # 9:16
+        "1024x1792": ["9:16", "1K"],
+        # 4:3
+        "1365x1024": ["4:3", "1K"],
+        # 3:4
+        "1024x1365": ["3:4", "1K"],
+        # 3:2
+        "1536x1024": ["3:2", "1K"],
+        # 2:3
+        "1024x1536": ["2:3", "1K"],
+    }
+
+    def __init__(self, port: int = DEFAULT_BROWSER_PORT):
         self.port = port
-        self._use_pure_http = use_pure_http
         self._captured: Optional[CapturedRequest] = None
-        
-        if use_pure_http:
-            # Pure HTTP mode: no browser needed for capture
-            from aistudio_api.infrastructure.gateway.pure_capture import PureHttpCaptureService
-            self._capture_service = PureHttpCaptureService(_snapshot_cache)
-            self._session = None
-            self._replay_service = RequestReplayService(session=None)
-        else:
-            # Browser mode: uses browser for capture and replay
-            self._session = BrowserSession(port=port)
-            self._capture_service = RequestCaptureService(self._session, _snapshot_cache)
-            self._replay_service = RequestReplayService(session=self._session)
+        self._session = BrowserSession(port=port)
+        self._capture_service = RequestCaptureService(self._session, _snapshot_cache)
+        self._replay_service = RequestReplayService(session=self._session)
         
         self._streaming_gateway = StreamingGateway(session=self._session)
 
@@ -264,29 +274,10 @@ class AIStudioClient:
         output.model = model
         return output
 
-    @staticmethod
-    def _convert_size_to_resolution(size: str) -> list:
-        """将 OpenAI 格式的 size 转换为 AI Studio 格式的 resolution."""
-        size_map = {
-            # 1:1
-            "512x512": ["1:1", "512"],
-            "1024x1024": ["1:1", "1K"],
-            "2048x2048": ["1:1", "2K"],
-            "4096x4096": ["1:1", "4K"],
-            # 16:9
-            "1792x1024": ["16:9", "1K"],
-            # 9:16
-            "1024x1792": ["9:16", "1K"],
-            # 4:3
-            "1365x1024": ["4:3", "1K"],
-            # 3:4
-            "1024x1365": ["3:4", "1K"],
-            # 3:2
-            "1536x1024": ["3:2", "1K"],
-            # 2:3
-            "1024x1536": ["2:3", "1K"],
-        }
-        return size_map.get(size, ["1:1", "1K"])
+    @classmethod
+    def resolve_image_size(cls, size: str) -> list[str] | None:
+        """将 OpenAI 风格的 size 映射为 AI Studio 的 output_resolution."""
+        return cls.IMAGE_SIZE_TO_OUTPUT_RESOLUTION.get(size)
 
     async def generate_image(
         self,
@@ -295,13 +286,26 @@ class AIStudioClient:
         save_path: Optional[str] = None,
         size: str = "1024x1024",
         google_search: bool = False,
+        images: Optional[list[str]] = None,
+        contents: Optional[list[AistudioContent]] = None,
     ) -> ModelOutput:
-        logger.info("生图请求: %r", f"{prompt[:20]}...")
-        captured = await self.capture_request(prompt, model=model)
+        logger.info("生图请求: %r, images=%s", f"{prompt[:20]}...", len(images) if images else 0)
+        request_contents = contents or [self._build_user_content(prompt=prompt, images=images)]
+        captured = await self.capture_request(prompt, model=model, images=images, contents=request_contents)
         if not captured:
             raise RequestError(0, "无法拦截请求")
 
-        modified_body = modify_body(captured.body, model=model, prompt=prompt)
+        generation_config_overrides = None
+        output_resolution = self.resolve_image_size(size)
+        if output_resolution is not None:
+            generation_config_overrides = {"output_resolution": output_resolution}
+
+        modified_body = modify_body(
+            captured.body,
+            model=model,
+            contents=request_contents,
+            generation_config_overrides=generation_config_overrides,
+        )
         status, raw = await self._replay_service.replay(captured, body=modified_body, timeout=120)
         raw_text = raw.decode("utf-8", errors="replace")
         self._dump_raw_exchange(

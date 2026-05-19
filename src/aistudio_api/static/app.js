@@ -272,10 +272,21 @@ function app() {
       const t = this.draft.trim(); const imgs = [...this.selectedImages]; if (!t && !imgs.length) return; if (this.busy || !this.model) return;
       this.msgs.push({ role: 'user', content: t, images: imgs }); this.draft = ''; this.selectedImages = []; this.busy = true; this.resizeTa(); this.scrollDown(); this.saveToCache();
 
-      // 生图模型走 /v1/images/generations
+      // 生图模型走 /v1/images/edits (支持原始图片编辑)
       if (this.model.includes('image')) {
         try {
-          const r = await this.apiFetch('/v1/images/generations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: this.model, prompt: t, size: '1024x1024' }) });
+          const formData = new FormData();
+          formData.append('model', this.model);
+          formData.append('prompt', t);
+          formData.append('size', '1024x1024');
+          // 如果有选中的图片，转换为 File 对象传给 edit 接口（支持多张）
+          for (let i = 0; i < imgs.length; i++) {
+            const response = await fetch(imgs[i]);
+            const blob = await response.blob();
+            const file = new File([blob], `image_${i}.png`, { type: 'image/png' });
+            formData.append('image', file);
+          }
+          const r = await this.apiFetch('/v1/images/edits', { method: 'POST', body: formData });
           if (!r.ok) { let e = r.statusText; try { const d = await r.json(); if (d.detail) e = JSON.stringify(d.detail) } catch (x) { }; this.msgs.push({ role: 'assistant', content: '', error: `Error ${r.status}: ${e}` }) }
           else {
             const d = await r.json(); const imgs = d.data || []; let content = ''; imgs.forEach(img => { if (img.b64_json) content += `![image](data:image/png;base64,${img.b64_json})\n`; else if (img.url) content += `![image](${img.url})\n`; if (img.revised_prompt) content += img.revised_prompt + '\n' });

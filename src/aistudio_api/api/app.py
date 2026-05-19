@@ -37,7 +37,6 @@ async def lifespan(app: FastAPI):
 
     client = AIStudioClient(
         port=runtime_state.browser_port,
-        use_pure_http=settings.use_pure_http,
     )
     runtime_state.client = client
     from aistudio_api.config import settings as app_settings
@@ -73,13 +72,12 @@ async def lifespan(app: FastAPI):
 
     # 后台预热浏览器，避免首次请求延迟
     warmup_task = None
-    if not settings.use_pure_http:
-        async def _warmup():
-            try:
-                await client.warmup()
-            except Exception as e:
-                logger.warning("浏览器预热失败: %s", e)
-        warmup_task = asyncio.create_task(_warmup())
+    async def _warmup():
+        try:
+            await client.warmup()
+        except Exception as e:
+            logger.warning("浏览器预热失败: %s", e)
+    warmup_task = asyncio.create_task(_warmup())
 
     yield
     logger.info("Shutting down")
