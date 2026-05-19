@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from aistudio_api.infrastructure.gateway.client import AIStudioClient
 
+from .routes_anthropic import router as anthropic_router
 from .dependencies import require_api_key
 from .routes_accounts import router as accounts_router
 from .routes_gemini import router as gemini_router
@@ -95,6 +96,7 @@ app.include_router(system_public_router)
 app.include_router(system_protected_router, dependencies=[Depends(require_api_key)])
 app.include_router(gemini_router, dependencies=[Depends(require_api_key)])
 app.include_router(openai_router, dependencies=[Depends(require_api_key)])
+app.include_router(anthropic_router， dependencies=[Depends(require_api_key)])
 app.include_router(accounts_router, dependencies=[Depends(require_api_key)])
 
 # 挂载静态文件
