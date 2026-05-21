@@ -19,6 +19,7 @@ from aistudio_api.infrastructure.gateway.wire_types import (
     AistudioContent,
     AistudioPart,
 )
+from aistudio_api.infrastructure.gateway.wire_codec import TOOLS_TEMPLATES
 
 
 SCHEMA_TYPE_CODES = {

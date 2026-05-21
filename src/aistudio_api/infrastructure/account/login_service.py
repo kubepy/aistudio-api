@@ -799,7 +799,16 @@ class LoginService:
 
             # 设置登录完成检测
             login_done = asyncio.Event()
+            login_aborted = asyncio.Event()
             detected_email: str | None = None
+
+            def abort_login(reason: str) -> None:
+                if login_done.is_set() or login_aborted.is_set():
+                    return
+                session.status = LoginStatus.FAILED
+                session.error = reason
+                login_aborted.set()
+                logger.warning(reason)
 
             async def on_navigation(frame):
                 nonlocal detected_email
@@ -822,7 +831,19 @@ class LoginService:
                         pass
                     login_done.set()
 
+            def on_page_close():
+                abort_login("登录窗口已关闭")
+
+            def on_context_close():
+                abort_login("登录上下文已关闭")
+
+            def on_browser_disconnected():
+                abort_login("登录浏览器已断开连接")
+
             page.on("framenavigated", on_navigation)
+            page.on("close", on_page_close)
+            context.on("close", on_context_close)
+            browser.on("disconnected", on_browser_disconnected)
 
             # 导航到 Google 登录页面
             logger.info("打开 Google 登录页面")
@@ -837,12 +858,28 @@ class LoginService:
 
             # 等待用户完成登录（最多 5 分钟）
             logger.info("等待用户登录...")
-            try:
-                await asyncio.wait_for(login_done.wait(), timeout=300)
-            except asyncio.TimeoutError:
+            wait_tasks = [
+                asyncio.create_task(login_done.wait()),
+                asyncio.create_task(login_aborted.wait()),
+            ]
+            done, pending = await asyncio.wait(
+                wait_tasks,
+                timeout=300,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in pending:
+                task.cancel()
+            for task in pending:
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+            if not done:
                 session.status = LoginStatus.FAILED
                 session.error = "登录超时（5 分钟）"
                 logger.warning("登录超时")
+                return
+            if login_aborted.is_set():
                 return
 
             # 登录完成，保存 storage state
