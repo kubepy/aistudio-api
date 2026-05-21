@@ -6,23 +6,30 @@ Google AIStudio Playgroud 反代，支持 Google 会员（Pro/Ultra），支持 
 
 ## 目录
 
-- [功能](#功能)
-- [快速开始](#快速开始)
-  - [直接启动](#直接启动)
-  - [Docker 部署](#docker-部署)
-  - [登录](#登录)
-- [使用示例](#使用示例)
-  - [OpenAI 兼容接口](#openai-兼容接口)
-  - [Gemini 原生接口](#gemini-原生接口)
-  - [Python（OpenAI SDK）](#pythonopenai-sdk)
-  - [命令行客户端](#命令行客户端)
-- [支持的模型](#支持的模型)
-- [配置](#配置)
-- [架构](#架构)
-- [BotGuard 原理](#botguard-原理)
-- [TODO](#todo)
-- [致谢](#致谢)
-- [License](#license)
+- [AI Studio API](#ai-studio-api)
+  - [目录](#目录)
+  - [功能](#功能)
+  - [快速开始](#快速开始)
+    - [直接启动](#直接启动)
+    - [Docker 部署](#docker-部署)
+    - [登录](#登录)
+      - [CLI 模式](#cli-模式)
+      - [有头模式，适合本地](#有头模式适合本地)
+      - [使用 cookies 登录，有效期短](#使用-cookies-登录有效期短)
+  - [使用示例](#使用示例)
+    - [OpenAI 兼容接口](#openai-兼容接口)
+    - [Gemini 原生接口](#gemini-原生接口)
+    - [Python（OpenAI SDK）](#pythonopenai-sdk)
+    - [命令行客户端](#命令行客户端)
+  - [支持的模型](#支持的模型)
+  - [配置](#配置)
+    - [模型配置](#模型配置)
+    - [安全设置](#安全设置)
+  - [架构](#架构)
+  - [BotGuard 原理](#botguard-原理)
+  - [TODO](#todo)
+  - [致谢](#致谢)
+  - [License](#license)
 
 ## 功能
 
@@ -187,6 +194,125 @@ python3 main.py client "画一只猫" --image --save cat.png
 | `AISTUDIO_ACCOUNT_ROTATION_MODE` | `round_robin` | 轮询模式：`round_robin`、`lru`、`least_rl` |
 | `AISTUDIO_ACCOUNT_COOLDOWN_SECONDS` | `60` | 限流后冷却时间 |
 | `AISTUDIO_DUMP_RAW_RESPONSE` | `0` | 保存原始响应到磁盘（调试） |
+
+### 模型配置
+
+项目根目录支持一个额外的 `config.yaml`，用于给不同模型族补默认参数。默认读取项目根目录的 `config.yaml`，也可以用 `AISTUDIO_CONFIG_FILE` 指向别的配置文件。
+
+当前主要用于这几类场景：
+
+- 给 `gemma` / `gemini` / 生图模型分别设置默认行为
+- 给特定模型补 `generation_config` 默认值
+- 控制某些生图模型需要清空哪些 wire 下标
+- 配置默认工具，例如 `google_search`
+- 配置安全设置 `safety_settings`
+
+当前仓库内置的示例：
+
+```yaml
+model_defaults:
+  profiles:
+    - name: image_models
+      match:
+        contains:
+          - image
+      is_image_model: true
+      generation_config_defaults:
+        response_mime_type: null
+        image_output_mode: image_only
+        thinking_config:
+          level: MINIMAL
+          mode: 1
+      clear_generation_config_indexes:
+        - 7
+        - 13
+        - 17
+      disable_safety_settings: true
+
+    - name: gemma_models
+      match:
+        prefixes:
+          - gemma-
+      default_tools:
+        - google_search
+      safety_settings:
+        Harassment: 5
+        Hate: 5
+        Sexually Explicit: 5
+        Dangerous Content: 5
+
+    - name: gemini_models
+      match:
+        prefixes:
+          - gemini-
+      safety_settings:
+        Harassment: 5
+        Hate: 5
+        Sexually Explicit: 5
+        Dangerous Content: 5
+
+  models: {}
+```
+
+`match` 支持三种方式：
+
+- `exact`: 精确命中模型名
+- `prefixes`: 前缀命中，适合 `gemma-`、`gemini-`
+- `contains`: 模型名包含指定片段时命中
+
+`generation_config_defaults` 目前支持这些常用字段：
+
+- `response_mime_type`
+- `thinking_config`
+- `image_output_mode`
+- `media_resolution`
+
+其中几个字段已经做了可读化转换：
+
+- `thinking_config.level`: `LOW` / `MEDIUM` / `HIGH` / `MINIMAL`
+- `image_output_mode`: `image_only` 或 `text_and_image`
+- `media_resolution`: `LOW` / `MEDIUM` / `HIGH`
+
+也可以对单个模型单独覆盖：
+
+```yaml
+model_defaults:
+  models:
+    gemini-3.1-flash-image-preview:
+      generation_config_defaults:
+        image_output_mode: text_and_image
+        media_resolution: HIGH
+```
+
+### 安全设置
+
+`safety_settings` 目前支持这四类：
+
+- `Harassment`
+- `Hate`
+- `Sexually Explicit`
+- `Dangerous Content`
+
+值范围是 `1` 到 `5`：
+
+- `1` 表示最严格，尽量完全拦截
+- `5` 表示关闭
+
+示例：
+
+```yaml
+safety_settings:
+  Harassment: 1
+  Hate: 2
+  Sexually Explicit: 3
+  Dangerous Content: 5
+```
+
+说明：
+
+- 文本模型会把这组配置下发到 AI Studio wire 请求
+- `safety_off=true` 会直接把这四项都设为 `5`
+- 当前默认的图片模型配置里 `disable_safety_settings: true`，所以生图模型会直接清空安全设置字段
 
 ## 架构
 

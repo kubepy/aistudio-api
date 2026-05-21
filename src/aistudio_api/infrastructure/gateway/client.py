@@ -12,7 +12,8 @@ from aistudio_api.domain.errors import RequestError, classify_error
 from aistudio_api.domain.models import ModelOutput, parse_image_output, parse_text_output
 from aistudio_api.infrastructure.cache.snapshot_cache import SnapshotCache
 from aistudio_api.infrastructure.gateway.capture import CapturedRequest, RequestCaptureService
-from aistudio_api.infrastructure.gateway.request_rewriter import TOOLS_TEMPLATES, modify_body
+from aistudio_api.infrastructure.gateway.model_defaults import resolve_model_defaults
+from aistudio_api.infrastructure.gateway.request_rewriter import TOOLS_TEMPLATES, build_image_generation_search_tool, modify_body
 from aistudio_api.infrastructure.gateway.replay import RequestReplayService
 from aistudio_api.infrastructure.gateway.session import BrowserSession
 from aistudio_api.infrastructure.gateway.streaming import StreamingGateway
@@ -276,7 +277,7 @@ class AIStudioClient:
 
     @classmethod
     def resolve_image_size(cls, size: str) -> list[str] | None:
-        """将 OpenAI 风格的 size 映射为 AI Studio 的 output_resolution."""
+        """将 OpenAI 风格的 size 映射为 AI Studio 的生图尺寸配置。"""
         return cls.IMAGE_SIZE_TO_OUTPUT_RESOLUTION.get(size)
 
     async def generate_image(
@@ -286,6 +287,8 @@ class AIStudioClient:
         save_path: Optional[str] = None,
         size: str = "1024x1024",
         google_search: bool = False,
+        image_search: bool = False,
+        use_default_tools: bool = True,
         images: Optional[list[str]] = None,
         contents: Optional[list[AistudioContent]] = None,
     ) -> ModelOutput:
@@ -299,11 +302,29 @@ class AIStudioClient:
         output_resolution = self.resolve_image_size(size)
         if output_resolution is not None:
             generation_config_overrides = {"output_resolution": output_resolution}
+        model_defaults = resolve_model_defaults(model)
+        resolved_tools = None
+        if google_search or image_search:
+            resolved_tools = [
+                build_image_generation_search_tool(
+                    google_search=google_search,
+                    image_search=image_search,
+                )
+            ]
+        elif use_default_tools and model_defaults.default_tools:
+            from aistudio_api.infrastructure.gateway.request_rewriter import build_tools_from_names
+
+            resolved_tools = build_tools_from_names(
+                model_defaults.default_tools,
+                model=model,
+                is_image_model=model_defaults.is_image_model,
+            ) or None
 
         modified_body = modify_body(
             captured.body,
             model=model,
             contents=request_contents,
+            tools=resolved_tools,
             generation_config_overrides=generation_config_overrides,
         )
         status, raw = await self._replay_service.replay(captured, body=modified_body, timeout=120)

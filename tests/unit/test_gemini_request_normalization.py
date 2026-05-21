@@ -1,6 +1,9 @@
+import pytest
+
 from aistudio_api.api.schemas import GeminiContent, GeminiGenerateContentRequest, GeminiGenerationConfig, GeminiPart
 from aistudio_api.application.chat_service import normalize_gemini_request, normalize_openai_tools
 from aistudio_api.api.schemas import ChatRequest
+from aistudio_api.infrastructure.gateway.wire_types import AistudioImageOutputMode
 
 
 def test_normalize_gemini_request_exposes_generation_config_overrides():
@@ -22,7 +25,7 @@ def test_normalize_gemini_request_exposes_generation_config_overrides():
             frequencyPenalty=0.2,
             responseLogprobs=True,
             logprobs=5,
-            mediaResolution=[2, 1],
+            mediaResolution=2,
             thinkingConfig=[1, None, None, 3],
         ),
     )
@@ -41,7 +44,8 @@ def test_normalize_gemini_request_exposes_generation_config_overrides():
         "frequency_penalty": 0.2,
         "response_logprobs": True,
         "logprobs": 5,
-        "media_resolution": [2, 1],
+        "image_output_mode": AistudioImageOutputMode.image_only(),
+        "media_resolution": 2,
         "thinking_config": [1, None, None, 3],
     }
 
@@ -80,6 +84,64 @@ def test_normalize_gemini_request_encodes_function_declarations_to_wire_tools():
             ],
         ]
     ]
+
+
+def test_normalize_gemini_request_applies_gemma_default_tools():
+    req = GeminiGenerateContentRequest(
+        contents=[GeminiContent(role="user", parts=[GeminiPart(text="hello")])],
+    )
+
+    normalized = normalize_gemini_request(req, "models/gemma-4-31b-it")
+
+    assert normalized["tools"] == [[None, None, None, [None, [[]]]]]
+
+
+def test_normalize_gemini_request_encodes_builtin_tools_to_wire():
+    req = GeminiGenerateContentRequest(
+        contents=[GeminiContent(role="user", parts=[GeminiPart(text="hello")])],
+        tools=[
+            {
+                "googleSearch": {},
+                "googleMaps": {},
+                "urlContext": {},
+                "codeExecution": {},
+            }
+        ],
+    )
+
+    normalized = normalize_gemini_request(req, "models/gemini-3.5-flash")
+
+    assert normalized["tools"] == [
+        [[]],
+        [None, None, None, [None, [[]]]],
+        [None, None, None, None, None, None, None, None, None, None, []],
+        [None, None, None, None, None, None, None, []],
+    ]
+
+
+def test_normalize_gemini_request_rejects_gemma_unsupported_builtin_tool():
+    req = GeminiGenerateContentRequest(
+        contents=[GeminiContent(role="user", parts=[GeminiPart(text="hello")])],
+        tools=[
+            {
+                "googleMaps": {},
+            }
+        ],
+    )
+
+    with pytest.raises(ValueError, match="not allowed"):
+        normalize_gemini_request(req, "models/gemma-4-31b-it")
+
+
+def test_normalize_gemini_request_empty_tools_disables_model_defaults():
+    req = GeminiGenerateContentRequest(
+        contents=[GeminiContent(role="user", parts=[GeminiPart(text="hello")])],
+        tools=[],
+    )
+
+    normalized = normalize_gemini_request(req, "models/gemma-4-31b-it")
+
+    assert normalized["tools"] == []
 
 
 def test_normalize_openai_tools_encodes_function_tools_to_wire():

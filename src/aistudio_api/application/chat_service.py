@@ -13,8 +13,12 @@ import httpx
 
 from aistudio_api.config import DEFAULT_IMAGE_MODEL
 from aistudio_api.domain.errors import RequestError
-from aistudio_api.infrastructure.gateway.request_rewriter import TOOLS_TEMPLATES
-from aistudio_api.infrastructure.gateway.wire_types import AistudioContent, AistudioPart, AistudioThinkingConfig, ThinkingLevel
+from aistudio_api.infrastructure.gateway.model_defaults import resolve_model_defaults
+from aistudio_api.infrastructure.gateway.request_rewriter import build_tools_from_names
+from aistudio_api.infrastructure.gateway.wire_types import (
+    AistudioContent,
+    AistudioPart,
+)
 
 
 SCHEMA_TYPE_CODES = {
@@ -519,32 +523,40 @@ def normalize_gemini_request(req, requested_model: str, tmp_dir: str = "/tmp") -
             ],
         )
 
+    model_defaults = resolve_model_defaults(model)
     tools = None
-    if req.tools:
+    if req.tools is not None:
         tools = []
         for tool in req.tools:
+            builtin_tool_names: list[str] = []
             if tool.codeExecution is not None:
-                tools.append(TOOLS_TEMPLATES["code_execution"])
+                builtin_tool_names.append("code_execution")
             if tool.functionDeclarations:
                 tools.append([None, [encode_function_declaration_to_wire(decl) for decl in tool.functionDeclarations]])
             if tool.googleSearch is not None or tool.googleSearchRetrieval is not None:
-                tools.append(TOOLS_TEMPLATES["google_search"])
+                builtin_tool_names.append("google_search")
+            if tool.googleMaps is not None:
+                builtin_tool_names.append("google_maps")
+            if tool.urlContext is not None:
+                builtin_tool_names.append("url_context")
+            if builtin_tool_names:
+                tools.extend(
+                    build_tools_from_names(
+                        builtin_tool_names,
+                        model=model,
+                        is_image_model=model_defaults.is_image_model,
+                    )
+                )
 
-    # Gemma 4 小模型默认开启 Google Search
-    if tools is None and any(m in model for m in ("gemma-4-26b-a4b-it", "gemma-4-31b-it")):
-        tools = [TOOLS_TEMPLATES["google_search"]]
-
-    is_image_model = "image" in model.lower()
+    if req.tools is None and model_defaults.default_tools:
+        tools = build_tools_from_names(
+            model_defaults.default_tools,
+            model=model,
+            is_image_model=model_defaults.is_image_model,
+        )
 
     generation_config = req.generationConfig
-    generation_config_overrides = None
-    if is_image_model:
-        # 生图模型需要特殊配置
-        generation_config_overrides = {
-            "response_mime_type": None,
-            "media_resolution": [2, 1],
-            "thinking_config": AistudioThinkingConfig(level=ThinkingLevel.MINIMAL, mode=1).to_wire(),
-        }
+    generation_config_overrides = model_defaults.generation_config_overrides() or None
     if generation_config is not None:
         if generation_config_overrides is None:
             generation_config_overrides = {}
@@ -583,7 +595,7 @@ def normalize_gemini_request(req, requested_model: str, tmp_dir: str = "/tmp") -
         "model": model,
         "contents": contents,
         "system_instruction": system_instruction,
-        "tools": tools or None,
+        "tools": tools if tools is not None else None,
         "capture_prompt": capture_prompt,
         "capture_images": capture_images or None,
         "cleanup_paths": cleanup_paths,

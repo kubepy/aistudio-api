@@ -29,6 +29,7 @@ from aistudio_api.application.api_service_common import (
 from aistudio_api.application.chat_service import cleanup_files, normalize_chat_request, normalize_openai_tools
 from aistudio_api.domain.errors import AistudioError, AuthError, RequestError, UsageLimitExceeded
 from aistudio_api.infrastructure.gateway.client import AIStudioClient
+from aistudio_api.infrastructure.gateway.model_defaults import resolve_model_defaults
 from aistudio_api.infrastructure.gateway.wire_types import AistudioContent, AistudioPart
 
 
@@ -53,12 +54,18 @@ async def handle_chat(req: ChatRequest, client: AIStudioClient):
                     req.stream,
                     attempt + 1,
                 )
-                tools = normalize_openai_tools(req.tools)
+                tools = None if req.tools is None else (normalize_openai_tools(req.tools) or [])
 
-                if tools is None and any(m in model for m in ("gemma-4-26b-a4b-it", "gemma-4-31b-it")):
-                    from aistudio_api.infrastructure.gateway.request_rewriter import TOOLS_TEMPLATES
+                if req.tools is None:
+                    from aistudio_api.infrastructure.gateway.request_rewriter import build_tools_from_names
 
-                    tools = [TOOLS_TEMPLATES["google_search"]]
+                    model_defaults = resolve_model_defaults(model)
+                    if model_defaults.default_tools:
+                        tools = build_tools_from_names(
+                            model_defaults.default_tools,
+                            model=model,
+                            is_image_model=model_defaults.is_image_model,
+                        )
 
                 if req.stream:
                     include_usage = True
@@ -148,6 +155,8 @@ async def handle_image_generation(req: ImageRequest, client: AIStudioClient):
                     model=req.model,
                     size=req.size,
                     google_search=req.google_search,
+                    image_search=req.image_search,
+                    use_default_tools=not bool({"google_search", "image_search"} & req.model_fields_set),
                 )
                 record_rotator_event("success")
                 runtime_state.record(req.model, "success", output.usage)

@@ -16,6 +16,7 @@ dependencies = [
   "playwright>=1.45.0",
   "uvicorn>=0.30.0",
   "python-dotenv>=1.0.0",
+  "PyYAML>=6.0.0",
   "cloakbrowser",
   "python-multipart>=0.0.9"
 ]

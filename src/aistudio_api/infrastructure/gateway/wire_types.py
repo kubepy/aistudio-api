@@ -13,6 +13,16 @@ class ThinkingLevel(IntEnum):
     MINIMAL = 4
 
 
+class MediaResolution(IntEnum):
+    LOW = 1
+    MEDIUM = 2
+    HIGH = 3
+
+
+class ImageOutputType(IntEnum):
+    IMAGE = 2
+
+
 @dataclass(frozen=True)
 class AistudioThinkingConfig:
     level: ThinkingLevel = ThinkingLevel.HIGH
@@ -24,6 +34,25 @@ class AistudioThinkingConfig:
     @classmethod
     def default(cls) -> "AistudioThinkingConfig":
         return cls()
+
+
+@dataclass(frozen=True)
+class AistudioImageOutputMode:
+    output_type: ImageOutputType = ImageOutputType.IMAGE
+    include_text: bool = False
+
+    def to_wire(self) -> list[int]:
+        if self.include_text:
+            return [int(self.output_type), 1]
+        return [int(self.output_type)]
+
+    @classmethod
+    def image_only(cls) -> "AistudioImageOutputMode":
+        return cls(include_text=False)
+
+    @classmethod
+    def text_and_image(cls) -> "AistudioImageOutputMode":
+        return cls(include_text=True)
 
 
 @dataclass
@@ -130,12 +159,14 @@ class AistudioGenerationConfig:
         self.values[12] = value
 
     @property
-    def media_resolution(self):
+    def image_output_mode(self):
         return self.values[14] if len(self.values) > 14 else None
 
-    @media_resolution.setter
-    def media_resolution(self, value):
+    @image_output_mode.setter
+    def image_output_mode(self, value):
         self._ensure_len(15)
+        if isinstance(value, AistudioImageOutputMode):
+            value = value.to_wire()
         self.values[14] = value
 
     @property
@@ -148,12 +179,14 @@ class AistudioGenerationConfig:
         self.values[16] = value
 
     @property
-    def request_flag(self):
+    def media_resolution(self):
         return self.values[17] if len(self.values) > 17 else None
 
-    @request_flag.setter
-    def request_flag(self, value):
+    @media_resolution.setter
+    def media_resolution(self, value):
         self._ensure_len(18)
+        if isinstance(value, MediaResolution):
+            value = int(value)
         self.values[17] = value
 
     @property
@@ -172,8 +205,6 @@ class AistudioGenerationConfig:
     def enable_default_thinking(self):
         if self.thinking_config is None:
             self.thinking_config = AistudioThinkingConfig.default().to_wire()
-        if self.request_flag is None:
-            self.request_flag = 1
 
     def sanitize_for_plain_text(self):
         self.response_mime_type = "text/plain"

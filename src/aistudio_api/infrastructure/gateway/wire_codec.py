@@ -9,12 +9,90 @@ from dataclasses import replace
 
 from aistudio_api.config import DEFAULT_TEXT_MODEL
 
+from .model_defaults import resolve_model_defaults
 from .wire_types import AistudioContent, AistudioGenerationConfig, AistudioPart, AistudioRequest
 
 TOOLS_TEMPLATES = {
     "code_execution": [[]],
     "google_search": [None, None, None, [None, [[]]]],
+    "google_maps": [None, None, None, None, None, None, None, None, None, None, []],
+    "url_context": [None, None, None, None, None, None, None, []],
 }
+
+
+def build_image_generation_search_tool(*, google_search: bool = False, image_search: bool = False) -> list | None:
+    if not google_search and not image_search:
+        return None
+    if google_search and image_search:
+        return [None, None, None, [None, [[], []]]]
+    if google_search:
+        return TOOLS_TEMPLATES["google_search"]
+    return [None, None, None, [None, [None, []]]]
+
+
+def _normalize_tool_name(raw_name: str, *, is_image_model: bool = False) -> str:
+    name = str(raw_name).strip().lower()
+    if is_image_model:
+        if name in {"google_search_and_image_search", "image_google_search_and_image_search"}:
+            return "google_search_and_image_search"
+        if name in {"image_search", "google_image_search"}:
+            return "image_search"
+        if name in {"google_search", "image_google_search"}:
+            return "google_search"
+    return name
+
+
+def _allowed_builtin_tools_for_model(model: str | None, *, is_image_model: bool = False) -> set[str]:
+    if is_image_model:
+        return {"google_search", "image_search", "google_search_and_image_search"}
+    normalized_model = str(model or "").removeprefix("models/").lower()
+    if normalized_model.startswith("gemma-"):
+        return {"google_search", "code_execution"}
+    if normalized_model.startswith("gemini-"):
+        return {"google_search", "code_execution", "google_maps", "url_context"}
+    return {"google_search", "code_execution"}
+
+
+def build_tools_from_names(
+    tool_names: list[str] | tuple[str, ...],
+    *,
+    model: str | None = None,
+    is_image_model: bool = False,
+) -> list[list]:
+    allowed = _allowed_builtin_tools_for_model(model, is_image_model=is_image_model)
+    if is_image_model:
+        google_search = False
+        image_search = False
+        for raw_name in tool_names:
+            name = _normalize_tool_name(raw_name, is_image_model=True)
+            if not name:
+                continue
+            if name not in allowed:
+                raise ValueError(f"Tool {raw_name!r} is not allowed for model {model or 'unknown'}")
+            if name == "google_search_and_image_search":
+                google_search = True
+                image_search = True
+            elif name == "google_search":
+                google_search = True
+            elif name == "image_search":
+                image_search = True
+        tool = build_image_generation_search_tool(
+            google_search=google_search,
+            image_search=image_search,
+        )
+        return [tool] if tool is not None else []
+
+    tools: list[list] = []
+    for raw_name in tool_names:
+        name = _normalize_tool_name(raw_name, is_image_model=False)
+        if not name:
+            continue
+        if name not in allowed:
+            raise ValueError(f"Tool {raw_name!r} is not allowed for model {model or 'unknown'}")
+        if name not in TOOLS_TEMPLATES:
+            raise ValueError(f"Unsupported tool name: {raw_name!r}")
+        tools.append(TOOLS_TEMPLATES[name])
+    return tools
 
 
 def _encode_image(path: str) -> tuple[str, str]:
@@ -70,15 +148,16 @@ class AistudioWireCodec:
         body[self.CACHED_CONTENT_INDEX] = request.cached_content
         body[self.TIMEZONE_INDEX] = request.location
 
-        is_image_model = "image" in request.model.lower()
-        if is_image_model:
+        model_defaults = resolve_model_defaults(request.model)
+        if model_defaults.is_image_model:
             gc = body[self.GENERATION_CONFIG_INDEX]
             if isinstance(gc, list):
-                # These fields come from text model template but image model expects null
-                for idx in [7, 13, 17]:
+                # Different image-capable models reject some text-model carry-over slots.
+                for idx in model_defaults.clear_generation_config_indexes:
                     if idx < len(gc):
                         gc[idx] = None
-            body[self.SAFETY_INDEX] = None
+            if model_defaults.disable_safety_settings:
+                body[self.SAFETY_INDEX] = None
         else:
             if request.tools:
                 self._ensure_len(body, self.TIMEZONE_INDEX + 1)
@@ -109,6 +188,7 @@ class AistudioWireCodec:
     ) -> str:
         request = self.decode(original_body)
         request.model = model
+        model_defaults = resolve_model_defaults(model)
         if snapshot is not None:
             request.snapshot = snapshot
 
@@ -126,6 +206,12 @@ class AistudioWireCodec:
                 else None
             )
 
+        defaults = model_defaults.generation_config_overrides()
+        for attr, value in defaults.items():
+            setattr(request.generation_config, attr, value)
+        if model_defaults.safety_settings is not None:
+            request.safety_settings = model_defaults.safety_settings_overrides()
+
         if max_tokens is not None:
             request.generation_config.max_tokens = max_tokens
         if temperature is not None:
@@ -142,15 +228,16 @@ class AistudioWireCodec:
 
         # OpenAI chat compatibility should not inherit browser-side structured output
         # or explicit reasoning settings from a previously captured AI Studio request.
-        if sanitize_plain_text and "image" not in model.lower():
+        if sanitize_plain_text and not model_defaults.is_image_model:
             request.generation_config.sanitize_for_plain_text()
             request.generation_config.enable_default_thinking()
 
         if safety_off:
-            request.safety_settings = [[None, None, cat, 4] for cat in [7, 8, 9, 10]]
+            request.safety_settings = [[None, None, cat, 5] for cat in [7, 8, 9, 10]]
 
-        if "image" not in model.lower():
-            request.tools = tools if tools else None
+        request.tools = tools if tools else None
+
+        if not model_defaults.is_image_model:
             if request.tools:
                 request.generation_config.response_mime_type = None
                 request.generation_config.response_schema = None

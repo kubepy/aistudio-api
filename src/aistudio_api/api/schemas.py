@@ -50,6 +50,7 @@ class ImageRequest(BaseModel):
     n: int = 1
     size: str = "1024x1024"
     google_search: bool = False
+    image_search: bool = False
 
 
 class ImageUrl(BaseModel):
@@ -86,6 +87,8 @@ class GeminiTool(BaseModel):
     codeExecution: Optional[dict[str, Any]] = None
     googleSearch: Optional[dict[str, Any]] = None
     googleSearchRetrieval: Optional[dict[str, Any]] = None
+    googleMaps: Optional[dict[str, Any]] = None
+    urlContext: Optional[dict[str, Any]] = None
     functionDeclarations: Optional[list[dict[str, Any]]] = None
 
 
