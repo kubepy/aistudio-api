@@ -308,4 +308,12 @@ def resolve_model_defaults(model: str, *, config_path: str | os.PathLike[str] | 
     override = _compiled_model_overrides(resolved_path).get(normalized)
     if override is not None:
         resolved = resolved.overridden(override)
+
+    if resolved.is_image_model:
+        allowed = {"google_search", "image_search", "google_search_and_image_search"}
+        filtered = tuple(t for t in resolved.default_tools if t in allowed)
+        if filtered != resolved.default_tools:
+            from dataclasses import replace
+            resolved = replace(resolved, default_tools=filtered)
+
     return resolved
