@@ -821,10 +821,6 @@ class BrowserSession:
                     hash_parts.append(part.inline_data[1])  # base64 data
                 if part.text:
                     hash_parts.append(str(part.text))
-                if part.function_call:
-                    hash_parts.append(json.dumps(part.function_call, ensure_ascii=False, sort_keys=True))
-                if part.function_response:
-                    hash_parts.append(json.dumps(part.function_response, ensure_ascii=False, sort_keys=True))
         content_hash = sha256(" ".join(hash_parts).encode("utf-8")).hexdigest()
 
         page.evaluate(
@@ -1132,10 +1128,30 @@ mw:((hash) => {
         raise RuntimeError(f"Hook install failed: {result} (url={page_url}, title={page_title!r})")
 
     def _click_run_button_sync(self, page) -> bool:
+        # Ctrl+Enter is the most reliable trigger on the new AI Studio layout.
+        # The visible "Run" button is a ctrl-enter-submit control and clicking it
+        # via ElementHandle can be flaky.  Ensure the textarea is focused first so
+        # the shortcut reaches the right target.
         try:
-            button = page.query_selector("button:has-text('Run')")
+            textarea = page.query_selector("textarea")
+            if textarea is not None:
+                textarea.focus()
+            page.keyboard.press("Control+Enter")
+            return True
         except Exception:
-            return False
+            pass
+
+        # 2. Fallback: locate the real submit button by its CSS class, avoiding
+        #    false matches from category cards that happen to contain "Run".
+        try:
+            button = page.query_selector("button.ctrl-enter-submits")
+            if button is None:
+                button = page.locator("button", has_text="Run").filter(
+                    has=page.locator("keyboard_return")
+                ).first
+                button = button.element_handle(timeout=2000)
+        except Exception:
+            button = None
         if button is None:
             return False
         try:
@@ -1145,8 +1161,13 @@ mw:((hash) => {
             return False
 
     def _has_run_button_sync(self, page) -> bool:
+        # Idle = no Stop button visible AND submit button present.
+        # During generation AI Studio shows a "Stop" button; checking for its
+        # absence is more reliable than the submit button's disabled state.
         try:
-            return page.query_selector("button:has-text('Run')") is not None
+            if page.query_selector("button:has-text('Stop')") is not None:
+                return False
+            return page.query_selector("button.ctrl-enter-submits") is not None
         except Exception:
             return False
 

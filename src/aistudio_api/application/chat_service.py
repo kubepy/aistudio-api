@@ -64,6 +64,14 @@ def normalize_chat_request(messages, requested_model: str, tmp_dir: str = "/tmp"
     cleanup_paths: list[str] = []
     saw_images = False
 
+    # Build tool_call_id → function name map from assistant tool_calls
+    tool_call_names: dict[str, str] = {}
+    for msg in messages:
+        if msg.tool_calls:
+            for tc in msg.tool_calls:
+                if tc.id and tc.function and tc.function.name:
+                    tool_call_names[tc.id] = tc.function.name
+
     for msg in messages:
         role = (msg.role or "user").lower()
         if role in ("system", "developer"):
@@ -76,6 +84,17 @@ def normalize_chat_request(messages, requested_model: str, tmp_dir: str = "/tmp"
         parts: list[AistudioPart] = []
         text_parts: list[str] = []
         image_paths: list[str] = []
+
+        # tool result → user role with marker
+        if role == "tool":
+            raw = _message_text_content(msg.content) or ""
+            fname = tool_call_names.get(msg.tool_call_id or "", "")
+            tagged = f"<tool_result name=\"{fname}\">\n{raw}\n</tool_result>" if fname else f"<tool_result>\n{raw}\n</tool_result>"
+            parts.append(AistudioPart(text=tagged))
+            text_parts.append(tagged)
+            contents.append(AistudioContent(role="user", parts=parts))
+            capture_texts.append(raw)
+            continue
 
         # OpenAI 兼容格式的 reasoning_content：思考内容作为首个 thought Part 传入
         if role == "assistant" and msg.reasoning_content:
