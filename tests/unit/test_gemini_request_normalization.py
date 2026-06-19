@@ -319,3 +319,33 @@ def test_normalize_openai_tools_omits_required_from_function_schema_wire():
 
     schema = normalize_openai_tools(req.tools)[0][1][0][2]
     assert len(schema) <= 7 or schema[7] is None
+
+
+def test_normalize_openai_tools_sanitizes_oneof_schema_for_wire():
+    req = ChatRequest(
+        messages=[{"role": "user", "content": "hello"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "spotify_playback",
+                    "description": "Control playback",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "state": {
+                                "oneOf": [
+                                    {"type": "string"},
+                                    {"type": "boolean"},
+                                ]
+                            }
+                        },
+                    },
+                },
+            }
+        ],
+    )
+
+    schema = normalize_openai_tools(req.tools)[0][1][0][2]
+    state_schema = schema[6][0][1]
+    assert state_schema == [1]

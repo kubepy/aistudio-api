@@ -233,7 +233,7 @@ def encode_function_declaration_to_wire(declaration: dict) -> list:
     if isinstance(parameters, dict):
         while len(wire) <= 2:
             wire.append(None)
-        wire[2] = encode_schema_to_wire(parameters, include_required=False)
+        wire[2] = encode_schema_to_wire(_sanitize_schema_for_wire(parameters), include_required=False)
 
     return wire
 
@@ -625,6 +625,9 @@ def _sanitize_schema_for_wire(schema: dict | None) -> dict:
         required = schema.get("required")
         if isinstance(required, list):
             sanitized["required"] = [name for name in required if isinstance(name, str) and name in properties]
+        property_ordering = schema.get("propertyOrdering")
+        if isinstance(property_ordering, list):
+            sanitized["propertyOrdering"] = [name for name in property_ordering if isinstance(name, str) and name in properties]
     elif schema_type == "array":
         sanitized["items"] = _sanitize_schema_for_wire(schema.get("items") if isinstance(schema.get("items"), dict) else None)
     return sanitized
