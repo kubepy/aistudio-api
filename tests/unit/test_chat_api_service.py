@@ -211,3 +211,112 @@ def test_normalize_chat_request_preserves_assistant_tool_call_before_tool_result
     assert contents[1].role == "model"
     assert contents[1].parts[0].function_call == ("get_weather", {"location": "Beijing"}, "call_123")
 
+
+
+def test_handle_chat_applies_openai_env_defaults(monkeypatch):
+    from aistudio_api.application import api_service_openai
+
+    async def _noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(api_service_openai, "require_busy_lock", lambda: asyncio.Semaphore(1))
+    monkeypatch.setattr(api_service_openai, "ensure_active_account", _noop)
+    monkeypatch.setattr(api_service_openai, "record_rotator_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(api_service_openai.settings, "openai_default_temperature", 0.6)
+    monkeypatch.setattr(api_service_openai.settings, "openai_default_top_p", 0.95)
+    monkeypatch.setattr(api_service_openai.settings, "openai_default_top_k", 40)
+    monkeypatch.setattr(api_service_openai.settings, "openai_default_max_tokens", 32768)
+    monkeypatch.setattr(api_service_openai.settings, "openai_default_thinking", "high")
+    monkeypatch.setattr(api_service_openai.settings, "openai_default_safety_off", True)
+    monkeypatch.setattr(api_service_openai.settings, "openai_default_google_search", False)
+
+    client = _CaptureChatClient()
+    req = ChatRequest(
+        model="gemini-3.5-flash",
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    asyncio.run(handle_chat(req, client))
+
+    kwargs = client.calls[0]["kwargs"]
+    assert kwargs["temperature"] == 0.6
+    assert kwargs["top_p"] == 0.95
+    assert kwargs["top_k"] == 40
+    assert kwargs["max_tokens"] == 32768
+    assert kwargs["safety_settings"] == [[None, None, 7, 5], [None, None, 8, 5], [None, None, 9, 5], [None, None, 10, 5]]
+    assert kwargs["generation_config_overrides"] == {"thinking_config": [1, None, None, 3]}
+
+
+def test_handle_chat_request_values_override_openai_env_defaults(monkeypatch):
+    from aistudio_api.application import api_service_openai
+
+    async def _noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(api_service_openai, "require_busy_lock", lambda: asyncio.Semaphore(1))
+    monkeypatch.setattr(api_service_openai, "ensure_active_account", _noop)
+    monkeypatch.setattr(api_service_openai, "record_rotator_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(api_service_openai.settings, "openai_default_temperature", 0.6)
+    monkeypatch.setattr(api_service_openai.settings, "openai_default_top_p", 0.95)
+    monkeypatch.setattr(api_service_openai.settings, "openai_default_top_k", 40)
+    monkeypatch.setattr(api_service_openai.settings, "openai_default_max_tokens", 32768)
+    monkeypatch.setattr(api_service_openai.settings, "openai_default_thinking", "high")
+    monkeypatch.setattr(api_service_openai.settings, "openai_default_safety_off", True)
+    monkeypatch.setattr(api_service_openai.settings, "openai_default_google_search", True)
+
+    client = _CaptureChatClient()
+    req = ChatRequest(
+        model="gemini-3.5-flash",
+        messages=[{"role": "user", "content": "hello"}],
+        temperature=0.2,
+        top_p=0.7,
+        top_k=12,
+        max_tokens=1024,
+        thinking="off",
+        safety_off=False,
+        google_search=False,
+    )
+
+    asyncio.run(handle_chat(req, client))
+
+    kwargs = client.calls[0]["kwargs"]
+    assert kwargs["temperature"] == 0.2
+    assert kwargs["top_p"] == 0.7
+    assert kwargs["top_k"] == 12
+    assert kwargs["max_tokens"] == 1024
+    assert kwargs["safety_settings"] is None
+    assert kwargs["generation_config_overrides"] == {"thinking_config": None}
+    assert kwargs["tools"] is None
+
+
+def test_handle_chat_env_google_search_not_auto_added_to_explicit_agent_tools(monkeypatch):
+    from aistudio_api.application import api_service_openai
+
+    async def _noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(api_service_openai, "require_busy_lock", lambda: asyncio.Semaphore(1))
+    monkeypatch.setattr(api_service_openai, "ensure_active_account", _noop)
+    monkeypatch.setattr(api_service_openai, "record_rotator_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(api_service_openai.settings, "openai_default_google_search", True)
+
+    client = _CaptureChatClient()
+    req = ChatRequest(
+        model="gemini-3.5-flash",
+        messages=[{"role": "user", "content": "hello"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "terminal",
+                    "parameters": {"type": "object", "properties": {"command": {"type": "string"}}},
+                },
+            }
+        ],
+    )
+
+    asyncio.run(handle_chat(req, client))
+
+    tools = client.calls[0]["kwargs"]["tools"]
+    assert tools is not None
+    assert len(tools) == 1

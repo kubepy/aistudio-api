@@ -223,10 +223,6 @@ class AistudioWireCodec:
             request.generation_config.top_p = top_p
         if top_k is not None:
             request.generation_config.top_k = top_k
-        for attr, value in (generation_config_overrides or {}).items():
-            if value is None or not hasattr(request.generation_config, attr):
-                continue
-            setattr(request.generation_config, attr, value)
         request.generation_config.enable_default_thinking()
 
         # OpenAI chat compatibility should not inherit browser-side structured output
@@ -234,6 +230,11 @@ class AistudioWireCodec:
         if sanitize_plain_text and not model_defaults.is_image_model:
             request.generation_config.sanitize_for_plain_text()
             request.generation_config.enable_default_thinking()
+
+        for attr, value in (generation_config_overrides or {}).items():
+            if not hasattr(request.generation_config, attr):
+                continue
+            setattr(request.generation_config, attr, value)
 
         if safety_off:
             request.safety_settings = [[None, None, cat, 5] for cat in [7, 8, 9, 10]]

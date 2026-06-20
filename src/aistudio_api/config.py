@@ -42,7 +42,14 @@ def _load_bool_env(*names: str, default: bool) -> bool:
     value = _load_env(*names)
     if value is None:
         return default
-    return value not in ("0", "false", "False")
+    return value.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _load_optional_bool_env(*names: str) -> bool | None:
+    value = _load_env(*names)
+    if value is None:
+        return None
+    return value.strip().lower() not in {"0", "false", "no", "off"}
 
 
 def _load_int_env(*names: str, default: int) -> int:
@@ -50,6 +57,20 @@ def _load_int_env(*names: str, default: int) -> int:
     if value is None:
         return default
     return int(value)
+
+
+def _load_optional_int_env(*names: str) -> int | None:
+    value = _load_env(*names)
+    if value is None:
+        return None
+    return int(value)
+
+
+def _load_optional_float_env(*names: str) -> float | None:
+    value = _load_env(*names)
+    if value is None:
+        return None
+    return float(value)
 
 
 def _parse_api_keys(raw: str | None) -> tuple[str, ...]:
@@ -180,6 +201,16 @@ class Settings:
     account_cooldown_seconds: int = int(os.getenv("AISTUDIO_ACCOUNT_COOLDOWN_SECONDS", "60"))
     account_max_retries: int = int(os.getenv("AISTUDIO_ACCOUNT_MAX_RETRIES", "3"))
     max_concurrency: int = int(os.getenv("AISTUDIO_MAX_CONCURRENCY", "3"))
+
+    # Defaults for OpenAI-compatible /v1/chat/completions requests.
+    # Incoming request fields still take precedence over these values.
+    openai_default_temperature: float | None = _load_optional_float_env("AISTUDIO_OPENAI_DEFAULT_TEMPERATURE")
+    openai_default_top_p: float | None = _load_optional_float_env("AISTUDIO_OPENAI_DEFAULT_TOP_P")
+    openai_default_top_k: int | None = _load_optional_int_env("AISTUDIO_OPENAI_DEFAULT_TOP_K")
+    openai_default_max_tokens: int | None = _load_optional_int_env("AISTUDIO_OPENAI_DEFAULT_MAX_TOKENS")
+    openai_default_thinking: str | None = _load_env("AISTUDIO_OPENAI_DEFAULT_THINKING")
+    openai_default_google_search: bool | None = _load_optional_bool_env("AISTUDIO_OPENAI_DEFAULT_GOOGLE_SEARCH")
+    openai_default_safety_off: bool = _load_bool_env("AISTUDIO_OPENAI_DEFAULT_SAFETY_OFF", default=False)
 
     @property
     def camoufox_port(self) -> int:

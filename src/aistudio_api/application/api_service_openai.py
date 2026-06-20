@@ -17,6 +17,7 @@ from aistudio_api.api.responses import (
     to_openai_tool_calls,
 )
 from aistudio_api.api.schemas import ChatRequest, ImageRequest
+from aistudio_api.config import settings
 from aistudio_api.api.state import runtime_state
 from aistudio_api.application.api_service_common import (
     MAX_RETRIES,
@@ -33,7 +34,12 @@ from aistudio_api.application.chat_service import cleanup_files, normalize_chat_
 from aistudio_api.domain.errors import AistudioError, AuthError, RequestError, UsageLimitExceeded
 from aistudio_api.infrastructure.gateway.client import AIStudioClient
 from aistudio_api.infrastructure.gateway.model_defaults import resolve_model_defaults
-from aistudio_api.infrastructure.gateway.wire_types import AistudioContent, AistudioPart
+from aistudio_api.infrastructure.gateway.wire_types import (
+    AistudioContent,
+    AistudioPart,
+    AistudioThinkingConfig,
+    ThinkingLevel,
+)
 
 
 async def handle_chat(req: ChatRequest, client: AIStudioClient):
@@ -48,16 +54,41 @@ async def handle_chat(req: ChatRequest, client: AIStudioClient):
             tmp_files = list(normalized["cleanup_paths"])
 
             try:
-                # Disable tools only for the immediate follow-up turn after a tool
-                # result.  Older tool results in the history must not disable tools
-                # for a new user request; otherwise the model can only emit textual
-                # pseudo-calls like <call:execute_code> instead of real tool_calls.
+                # Disable implicit/default tools only for the immediate follow-up
+                # turn after a tool result.  Explicit OpenAI tools must survive so
+                # agent clients such as Hermes can decide whether to call another
+                # tool or finish.
                 pending_tool_result = _last_non_system_role(req.messages) == "tool"
-                # Preserve explicitly supplied OpenAI tools even immediately after
-                # a tool result.  Agent clients such as Hermes need this turn to
-                # decide whether to call another tool or finish.  Only suppress
-                # implicit/default tools after a tool result.
+                request_options = _resolve_openai_request_options(req)
                 tools = None if req.tools is None else (normalize_openai_tools(req.tools) or [])
+
+                if req.tools is None and not pending_tool_result:
+                    from aistudio_api.infrastructure.gateway.request_rewriter import build_tools_from_names
+
+                    model_defaults = resolve_model_defaults(model)
+                    default_tool_names = list(model_defaults.default_tools or [])
+                    if request_options["google_search"] is True and "google_search" not in default_tool_names:
+                        default_tool_names.append("google_search")
+                    elif request_options["google_search"] is False:
+                        default_tool_names = _remove_google_search_tool_names(default_tool_names)
+                    if default_tool_names:
+                        tools = build_tools_from_names(
+                            default_tool_names,
+                            model=model,
+                            is_image_model=model_defaults.is_image_model,
+                        )
+                elif req.tools is not None and _request_field_set(req, "google_search") and req.google_search:
+                    from aistudio_api.infrastructure.gateway.request_rewriter import build_tools_from_names
+
+                    model_defaults = resolve_model_defaults(model)
+                    tools = list(tools or [])
+                    tools.extend(
+                        build_tools_from_names(
+                            ["google_search"],
+                            model=model,
+                            is_image_model=model_defaults.is_image_model,
+                        )
+                    )
 
                 logger.info(
                     "Chat: model=%s, contents=%s, capture_prompt=%s..., images=%s, stream=%s, attempt=%d, last_role=%s, req_tools=%s, forwarded_tools=%s",
@@ -72,17 +103,6 @@ async def handle_chat(req: ChatRequest, client: AIStudioClient):
                     "none" if tools is None else len(tools),
                 )
 
-                if req.tools is None and not pending_tool_result:
-                    from aistudio_api.infrastructure.gateway.request_rewriter import build_tools_from_names
-
-                    model_defaults = resolve_model_defaults(model)
-                    if model_defaults.default_tools:
-                        tools = build_tools_from_names(
-                            model_defaults.default_tools,
-                            model=model,
-                            is_image_model=model_defaults.is_image_model,
-                        )
-
                 if req.stream:
                     include_usage = True
                     if req.stream_options is not None:
@@ -96,11 +116,13 @@ async def handle_chat(req: ChatRequest, client: AIStudioClient):
                         system_instruction=normalized["system_instruction"],
                         cleanup_paths=tmp_files,
                         include_usage=include_usage,
-                        temperature=req.temperature,
-                        top_p=req.top_p,
-                        top_k=req.top_k,
-                        max_tokens=req.max_tokens,
+                        temperature=request_options["temperature"],
+                        top_p=request_options["top_p"],
+                        top_k=request_options["top_k"],
+                        max_tokens=request_options["max_tokens"],
                         tools=tools,
+                        safety_settings=request_options["safety_settings"],
+                        generation_config_overrides=request_options["generation_config_overrides"],
                     )
 
                 output = await client.generate_content(
@@ -113,11 +135,13 @@ async def handle_chat(req: ChatRequest, client: AIStudioClient):
                         if normalized["system_instruction"]
                         else None
                     ),
-                    temperature=req.temperature,
-                    top_p=req.top_p,
-                    top_k=req.top_k,
-                    max_tokens=req.max_tokens,
+                    temperature=request_options["temperature"],
+                    top_p=request_options["top_p"],
+                    top_k=request_options["top_k"],
+                    max_tokens=request_options["max_tokens"],
                     tools=tools,
+                    safety_settings=request_options["safety_settings"],
+                    generation_config_overrides=request_options["generation_config_overrides"],
                     sanitize_plain_text=True,
                 )
 
@@ -276,6 +300,8 @@ def _build_streaming_response(
     top_k: int | None = None,
     max_tokens: int | None = None,
     tools: list[list] | None = None,
+    safety_settings: list[list] | None = None,
+    generation_config_overrides: dict | None = None,
 ) -> StreamingResponse:
     async def stream_response():
         busy_lock = runtime_state.busy_lock
@@ -308,6 +334,8 @@ def _build_streaming_response(
                             top_k=top_k,
                             max_tokens=max_tokens,
                             tools=tools,
+                            safety_settings=safety_settings,
+                            generation_config_overrides=generation_config_overrides,
                             force_refresh_capture=stream_attempt > 0,
                         ):
                             has_yielded_data = True
@@ -408,6 +436,68 @@ def _build_streaming_response(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+def _remove_google_search_tool_names(tool_names: list[str]) -> list[str]:
+    search_tools = {"google_search", "google_search_and_image_search", "image_search"}
+    return [name for name in tool_names if name not in search_tools]
+
+
+def _request_field_set(req: ChatRequest, field: str) -> bool:
+    """Return whether a Pydantic request explicitly included a field."""
+
+    fields_set = getattr(req, "model_fields_set", set())
+    return field in fields_set
+
+
+def _resolve_openai_request_options(req: ChatRequest) -> dict[str, object]:
+    """Apply .env defaults to OpenAI-compatible chat requests.
+
+    Request values take precedence over AISTUDIO_OPENAI_DEFAULT_* settings.  For
+    boolean extension fields, Pydantic's model_fields_set lets clients explicitly
+    send false to override a true environment default.
+    """
+
+    thinking = req.thinking if _request_field_set(req, "thinking") else settings.openai_default_thinking
+    safety_off = req.safety_off if _request_field_set(req, "safety_off") else settings.openai_default_safety_off
+    google_search = (
+        req.google_search if _request_field_set(req, "google_search") else settings.openai_default_google_search
+    )
+
+    generation_config_overrides: dict[str, object | None] = {}
+    if thinking is not None:
+        generation_config_overrides["thinking_config"] = _openai_thinking_config(thinking)
+
+    return {
+        "temperature": req.temperature if req.temperature is not None else settings.openai_default_temperature,
+        "top_p": req.top_p if req.top_p is not None else settings.openai_default_top_p,
+        "top_k": req.top_k if req.top_k is not None else settings.openai_default_top_k,
+        "max_tokens": req.max_tokens if req.max_tokens is not None else settings.openai_default_max_tokens,
+        "google_search": google_search,
+        "safety_settings": _safety_off_settings() if safety_off else None,
+        "generation_config_overrides": generation_config_overrides or None,
+    }
+
+
+def _openai_thinking_config(value: str):
+    label = str(value).strip().lower()
+    if label in {"", "off", "none", "false", "0"}:
+        return None
+    level_map = {
+        "low": ThinkingLevel.LOW,
+        "medium": ThinkingLevel.MEDIUM,
+        "mid": ThinkingLevel.MEDIUM,
+        "high": ThinkingLevel.HIGH,
+        "minimal": ThinkingLevel.MINIMAL,
+        "min": ThinkingLevel.MINIMAL,
+    }
+    if label not in level_map:
+        raise ValueError(f"Unsupported OpenAI thinking default: {value!r}")
+    return AistudioThinkingConfig(level=level_map[label], mode=1).to_wire()
+
+
+def _safety_off_settings() -> list[list]:
+    return [[None, None, cat, 5] for cat in [7, 8, 9, 10]]
 
 
 def _last_non_system_role(messages) -> str:

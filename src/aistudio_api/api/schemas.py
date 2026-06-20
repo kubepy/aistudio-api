@@ -50,6 +50,9 @@ class ChatRequest(BaseModel):
     top_p: Optional[float] = None
     top_k: Optional[int] = None
     max_tokens: Optional[int] = None
+    thinking: Optional[str] = None
+    google_search: bool = False
+    safety_off: bool = False
     tools: Optional[list[OpenAITool]] = None
     stream_options: "StreamOptions | None" = None
 
