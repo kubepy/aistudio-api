@@ -96,3 +96,41 @@ def test_parse_response_chunk_extracts_real_aistudio_function_call_shape():
             "thought_signature": "EiYKJGUyNDgzMGE3LTVjZDYtNDJmZS05OThiLWVlNTM5ZTcyYjljMw==",
         }
     ]
+
+
+def test_parse_response_chunk_decodes_two_slot_scalar_function_args():
+    chunk = [
+        [
+            [
+                [
+                    [
+                        [
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            ["add", [[["a", [None, 2]], ["b", [None, 3]]]], "call_123"],
+                        ]
+                    ],
+                    "model",
+                ]
+            ]
+        ],
+        None,
+        [5, 1, 6],
+        None,
+        None,
+        None,
+        None,
+        "resp_two_slot",
+    ]
+
+    candidate = parse_response_chunk(chunk)
+
+    assert candidate.function_calls[0]["args"] == {"a": 2, "b": 3}

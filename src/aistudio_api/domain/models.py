@@ -228,8 +228,15 @@ def _decode_wire_argument_pairs(raw_args: Any) -> Any:
 
 def _decode_wire_value(value: Any) -> Any:
     if isinstance(value, list):
+        # AI Studio encodes scalar argument values in sparse positional arrays.
+        # The common shape is [None, None, value], but some Gemini variants now
+        # return [None, value].  Decode both before trying nested object/list
+        # handling; otherwise OpenAI-compatible tool arguments leak as
+        # {"a": [null, 2]} instead of {"a": 2}.
         if len(value) >= 3 and value[2] is not None:
             return value[2]
+        if len(value) == 2 and value[0] is None and value[1] is not None:
+            return value[1]
         decoded = _decode_wire_argument_pairs(value)
         if decoded != value:
             return decoded
