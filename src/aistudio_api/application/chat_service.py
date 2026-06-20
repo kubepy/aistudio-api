@@ -63,6 +63,7 @@ def normalize_chat_request(messages, requested_model: str, tmp_dir: str = "/tmp"
     capture_images: list[str] = []
     cleanup_paths: list[str] = []
     saw_images = False
+    saw_tool_result = any((msg.role or "").lower() == "tool" for msg in messages)
 
     # Build tool_call_id → function name map from assistant tool_calls
     tool_call_names: dict[str, str] = {}
@@ -85,13 +86,20 @@ def normalize_chat_request(messages, requested_model: str, tmp_dir: str = "/tmp"
         text_parts: list[str] = []
         image_paths: list[str] = []
 
-        # tool result → user role with marker
+        # OpenAI tool result compatibility path.
+        # AI Studio's browser endpoint may reject replayed native function_response
+        # parts with permission errors.  Once a tool result is present, disable
+        # tools for the follow-up request and send the result as plain text so
+        # the model must produce a final answer instead of re-calling the tool.
         if role == "tool":
             raw = _message_text_content(msg.content) or ""
-            fname = tool_call_names.get(msg.tool_call_id or "", "")
-            tagged = f"<tool_result name=\"{fname}\">\n{raw}\n</tool_result>" if fname else f"<tool_result>\n{raw}\n</tool_result>"
+            call_id = msg.tool_call_id or ""
+            fname = tool_call_names.get(call_id, "unknown")
+            tagged = (
+                f'<tool_result name="{fname}" tool_call_id="{call_id}">\n{raw}\n</tool_result>\n'
+                "请根据以上工具结果继续回答，不要再次调用同一个工具。"
+            )
             parts.append(AistudioPart(text=tagged))
-            text_parts.append(tagged)
             contents.append(AistudioContent(role="user", parts=parts))
             capture_texts.append(raw)
             continue
@@ -99,6 +107,22 @@ def normalize_chat_request(messages, requested_model: str, tmp_dir: str = "/tmp"
         # OpenAI 兼容格式的 reasoning_content：思考内容作为首个 thought Part 传入
         if role == "assistant" and msg.reasoning_content:
             parts.append(AistudioPart(text=msg.reasoning_content, thought=True))
+
+        if role == "assistant" and msg.tool_calls and not saw_tool_result:
+            for tc in msg.tool_calls:
+                if not tc.function or not tc.function.name:
+                    continue
+                parts.append(
+                    AistudioPart(
+                        function_call=(
+                            tc.function.name,
+                            _parse_tool_call_arguments(tc.function.arguments),
+                            tc.id,
+                        )
+                        if tc.id
+                        else (tc.function.name, _parse_tool_call_arguments(tc.function.arguments))
+                    )
+                )
 
         if isinstance(msg.content, str):
             if msg.content:
@@ -156,6 +180,16 @@ def _message_text_content(content) -> str | None:
         texts = [part.text for part in content if part.type == "text" and part.text]
         return "\n".join(texts) if texts else None
     return None
+
+
+def _parse_tool_call_arguments(arguments: str | None) -> Any:
+    if not arguments:
+        return {}
+    try:
+        parsed = json.loads(arguments)
+    except json.JSONDecodeError:
+        return {"arguments": arguments}
+    return parsed if isinstance(parsed, dict) else {"arguments": parsed}
 
 
 def _image_path_to_part(path: str) -> AistudioPart:

@@ -8,8 +8,10 @@ from aistudio_api.infrastructure.gateway.wire_types import AistudioPart
 def test_aistudio_part_encodes_function_call_and_response():
     call = AistudioPart(function_call=("Read", {"file_path": "navigation/a.py"}, "toolu_1"), thought_signature="sig")
     response = AistudioPart(function_response=("Read", {"result": "content"}))
+    numeric_call = AistudioPart(function_call=("add", {"a": 2, "b": 3}, "call_1"))
 
     assert call.to_wire()[10] == ["Read", [[["file_path", [None, None, "navigation/a.py"]]]], "toolu_1"]
+    assert numeric_call.to_wire()[10] == ["add", [[["a", [None, 2]], ["b", [None, 3]]]], "call_1"]
     assert call.to_wire()[14] == "sig"
     assert response.to_wire()[11] == ["Read", [[["result", [None, None, "content"]]]]]
 

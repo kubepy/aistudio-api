@@ -71,17 +71,41 @@ def test_normalize_chat_request_tool_calls_and_responses():
     res = normalize_chat_request(messages, "gemini-3.5-flash")
     contents = res["contents"]
 
-    assert len(contents) == 3
+    assert len(contents) == 2
 
     # Check User Message
     assert contents[0].role == "user"
     assert contents[0].parts[0].text == "What is the weather like in Beijing?"
 
-    # Check Assistant Tool Call Message
+    # Once a tool result exists, use a text compatibility path and disable tools
+    # in the OpenAI handler; AI Studio browser rejects replayed function_response.
+    assert contents[1].role == "user"
+    assert '<tool_result name="get_weather" tool_call_id="call_123">' in contents[1].parts[0].text
+    assert '{"temperature": 24, "condition": "sunny"}' in contents[1].parts[0].text
+
+
+def test_normalize_chat_request_preserves_assistant_tool_call_before_tool_result():
+    from aistudio_api.application.chat_service import normalize_chat_request
+    from aistudio_api.api.schemas import Message
+
+    messages = [
+        Message(role="user", content="What is the weather like in Beijing?"),
+        Message(
+            role="assistant",
+            content="",
+            tool_calls=[
+                {
+                    "id": "call_123",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"location": "Beijing"}'},
+                }
+            ],
+        ),
+    ]
+
+    contents = normalize_chat_request(messages, "gemini-3.5-flash")["contents"]
+
+    assert len(contents) == 2
     assert contents[1].role == "model"
     assert contents[1].parts[0].function_call == ("get_weather", {"location": "Beijing"}, "call_123")
-
-    # Check Tool Response Message
-    assert contents[2].role == "user"
-    assert contents[2].parts[0].function_response == ("get_weather", {"temperature": 24, "condition": "sunny"}, "call_123")
 

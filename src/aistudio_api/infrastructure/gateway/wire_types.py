@@ -280,6 +280,8 @@ def _encode_wire_value(value):
         return [None, _encode_wire_args(value)]
     if isinstance(value, list):
         return [None, None, [_encode_wire_value(item) for item in value]]
+    if isinstance(value, bool) or isinstance(value, (int, float)):
+        return [None, value]
     return [None, None, value]
 
 

@@ -54,9 +54,10 @@ async def handle_chat(req: ChatRequest, client: AIStudioClient):
                     req.stream,
                     attempt + 1,
                 )
-                tools = None if req.tools is None else (normalize_openai_tools(req.tools) or [])
+                has_tool_result = any((msg.role or "").lower() == "tool" for msg in req.messages)
+                tools = [] if has_tool_result else (None if req.tools is None else (normalize_openai_tools(req.tools) or []))
 
-                if req.tools is None:
+                if req.tools is None and not has_tool_result:
                     from aistudio_api.infrastructure.gateway.request_rewriter import build_tools_from_names
 
                     model_defaults = resolve_model_defaults(model)
