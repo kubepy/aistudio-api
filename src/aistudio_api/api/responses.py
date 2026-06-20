@@ -234,12 +234,18 @@ def _function_call_arguments(function_call: dict[str, Any]) -> str:
     return "{}"
 
 
-def to_openai_tool_calls(function_calls: list[dict[str, Any]]) -> list[OpenAIToolCall]:
+def to_openai_tool_calls(function_calls: list[dict[str, Any]], *, include_index: bool = False) -> list[OpenAIToolCall]:
     tool_calls: list[OpenAIToolCall] = []
     for idx, function_call in enumerate(function_calls):
         tool_calls.append(
             OpenAIToolCall(
-                id=f"call_{uuid.uuid4().hex[:12]}_{idx}",
+                id=(
+                    function_call.get("call_id")
+                    or function_call.get("id")
+                    or function_call.get("anthropic_tool_use_id")
+                    or f"call_{uuid.uuid4().hex[:12]}_{idx}"
+                ),
+                index=idx if include_index else None,
                 function=OpenAIFunctionCallPayload(
                     name=function_call.get("name", "unknown"),
                     arguments=_function_call_arguments(function_call),

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import re
+
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
@@ -45,21 +48,29 @@ async def handle_chat(req: ChatRequest, client: AIStudioClient):
             tmp_files = list(normalized["cleanup_paths"])
 
             try:
+                # Disable tools only for the immediate follow-up turn after a tool
+                # result.  Older tool results in the history must not disable tools
+                # for a new user request; otherwise the model can only emit textual
+                # pseudo-calls like <call:execute_code> instead of real tool_calls.
+                pending_tool_result = _last_non_system_role(req.messages) == "tool"
+                # Preserve explicitly supplied OpenAI tools even immediately after
+                # a tool result.  Agent clients such as Hermes need this turn to
+                # decide whether to call another tool or finish.  Only suppress
+                # implicit/default tools after a tool result.
+                tools = None if req.tools is None else (normalize_openai_tools(req.tools) or [])
+
                 logger.info(
-                    "Chat: model=%s, contents=%s, capture_prompt=%s..., images=%s, stream=%s, attempt=%d",
+                    "Chat: model=%s, contents=%s, capture_prompt=%s..., images=%s, stream=%s, attempt=%d, last_role=%s, req_tools=%s, forwarded_tools=%s",
                     model,
                     len(normalized["contents"]),
                     normalized["capture_prompt"][:50],
                     len(normalized["capture_images"]),
                     req.stream,
                     attempt + 1,
+                    "tool" if pending_tool_result else _last_non_system_role(req.messages),
+                    len(req.tools or []),
+                    "none" if tools is None else len(tools),
                 )
-                # Disable tools only for the immediate follow-up turn after a tool
-                # result.  Older tool results in the history must not disable tools
-                # for a new user request; otherwise the model can only emit textual
-                # pseudo-calls like <call:execute_code> instead of real tool_calls.
-                pending_tool_result = _last_non_system_role(req.messages) == "tool"
-                tools = [] if pending_tool_result else (None if req.tools is None else (normalize_openai_tools(req.tools) or []))
 
                 if req.tools is None and not pending_tool_result:
                     from aistudio_api.infrastructure.gateway.request_rewriter import build_tools_from_names
@@ -278,6 +289,7 @@ def _build_streaming_response(
                 chat_id = new_chat_id()
                 final_usage = None
                 saw_tool_calls = False
+                buffered_body: list[str] = []
                 for stream_attempt in range(MAX_RETRIES):
                     try:
                         has_yielded_data = False
@@ -300,16 +312,30 @@ def _build_streaming_response(
                         ):
                             has_yielded_data = True
                             if event_type == "body" and text:
-                                yield sse_chunk(chat_id, model, text, include_usage=include_usage)
+                                if tools:
+                                    buffered_body.append(str(text))
+                                else:
+                                    yield sse_chunk(chat_id, model, text, include_usage=include_usage)
                             elif event_type == "thinking" and text:
                                 yield sse_chunk(chat_id, model, "", thinking=text, include_usage=include_usage)
                             elif event_type == "tool_calls" and text:
                                 saw_tool_calls = True
+                                tool_names = [
+                                    str(call.get("name") or call.get("function_name") or "")
+                                    for call in (text if isinstance(text, list) else [])
+                                    if isinstance(call, dict)
+                                ]
+                                logger.info(
+                                    "OpenAI stream tool_calls: model=%s, count=%d, names=%s",
+                                    model,
+                                    len(tool_names),
+                                    tool_names[:10],
+                                )
                                 yield sse_chunk(
                                     chat_id,
                                     model,
                                     "",
-                                    tool_calls=to_openai_tool_calls(text if isinstance(text, list) else []),
+                                    tool_calls=to_openai_tool_calls(text if isinstance(text, list) else [], include_index=True),
                                     include_usage=include_usage,
                                 )
                             elif event_type == "usage":
@@ -337,6 +363,33 @@ def _build_streaming_response(
 
                 record_rotator_event("success")
                 runtime_state.record(model, "success", final_usage)
+                if tools and buffered_body and not saw_tool_calls:
+                    body_text = "".join(buffered_body)
+                    pseudo_tool_calls = _extract_pseudo_tool_calls(body_text)
+                    if pseudo_tool_calls:
+                        saw_tool_calls = True
+                        logger.info(
+                            "OpenAI stream pseudo tool_calls converted: model=%s, count=%d, names=%s",
+                            model,
+                            len(pseudo_tool_calls),
+                            [str(call.get("name") or "") for call in pseudo_tool_calls[:10]],
+                        )
+                        yield sse_chunk(
+                            chat_id,
+                            model,
+                            "",
+                            tool_calls=to_openai_tool_calls(pseudo_tool_calls, include_index=True),
+                            include_usage=include_usage,
+                        )
+                    else:
+                        for body_chunk in buffered_body:
+                            yield sse_chunk(chat_id, model, body_chunk, include_usage=include_usage)
+                logger.info(
+                    "OpenAI stream finish: model=%s, finish_reason=%s, final_usage=%s",
+                    model,
+                    "tool_calls" if saw_tool_calls else "stop",
+                    final_usage,
+                )
                 yield sse_chunk(chat_id, model, "", finish="tool_calls" if saw_tool_calls else "stop", include_usage=include_usage)
                 if include_usage:
                     yield sse_usage_chunk(chat_id, model, final_usage)
@@ -363,3 +416,43 @@ def _last_non_system_role(messages) -> str:
         if role not in {"system", "developer"}:
             return role
     return ""
+
+
+_PSEUDO_TOOL_CALL_RE = re.compile(
+    r"<tool_call\s+([^>]*)>\s*(.*?)\s*</tool_call>",
+    re.IGNORECASE | re.DOTALL,
+)
+_PSEUDO_TOOL_ATTR_RE = re.compile(r"(\w+)\s*=\s*(['\"])(.*?)\2", re.DOTALL)
+
+
+def _extract_pseudo_tool_calls(text: str) -> list[dict]:
+    """Convert textual <tool_call ...>{...}</tool_call> blocks to function calls.
+
+    Gemini occasionally emits the agent tool-call transcript as plain text instead
+    of native function calls.  Agent clients such as Hermes only continue when the
+    OpenAI response contains real tool_calls, so translate complete transcript
+    blocks back into function calls as a compatibility fallback.
+    """
+
+    calls: list[dict] = []
+    for match in _PSEUDO_TOOL_CALL_RE.finditer(text):
+        attrs = {key: value for key, _quote, value in _PSEUDO_TOOL_ATTR_RE.findall(match.group(1))}
+        name = attrs.get("name") or attrs.get("function")
+        if not name:
+            continue
+
+        raw_args = match.group(2).strip()
+        try:
+            args = json.loads(raw_args) if raw_args else {}
+        except json.JSONDecodeError:
+            args = {"input": raw_args}
+        if not isinstance(args, dict):
+            args = {"input": args}
+
+        call: dict = {"name": name, "args": args}
+        call_id = attrs.get("tool_call_id") or attrs.get("id") or attrs.get("call_id")
+        if call_id:
+            call["call_id"] = call_id
+        calls.append(call)
+
+    return calls

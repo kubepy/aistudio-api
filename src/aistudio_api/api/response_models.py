@@ -26,6 +26,7 @@ class OpenAIFunctionCallPayload(BaseModel):
 
 class OpenAIToolCall(BaseModel):
     id: str
+    index: int | None = None
     type: Literal["function"] = "function"
     function: OpenAIFunctionCallPayload
 

@@ -101,7 +101,7 @@ def normalize_chat_request(messages, requested_model: str, tmp_dir: str = "/tmp"
             fname = tool_call_names.get(call_id, "unknown")
             tagged = (
                 f'<tool_result name="{fname}" tool_call_id="{call_id}">\n{raw}\n</tool_result>\n'
-                "请根据以上工具结果继续回答，不要再次调用同一个工具。"
+                "请根据以上工具结果继续推进任务；如果仍需要更多操作，可以继续调用合适的工具。"
             )
             parts.append(AistudioPart(text=tagged))
             contents.append(AistudioContent(role="user", parts=parts))
@@ -114,7 +114,16 @@ def normalize_chat_request(messages, requested_model: str, tmp_dir: str = "/tmp"
 
         if role == "assistant" and msg.tool_calls:
             for tc in msg.tool_calls:
-                if not tc.function or not tc.function.name or tc.id in completed_tool_call_ids:
+                if not tc.function or not tc.function.name:
+                    continue
+                if tc.id in completed_tool_call_ids:
+                    transcript = _tool_call_transcript(
+                        tc.function.name,
+                        tc.function.arguments,
+                        tc.id,
+                    )
+                    parts.append(AistudioPart(text=transcript))
+                    text_parts.append(transcript)
                     continue
                 parts.append(
                     AistudioPart(
@@ -194,6 +203,16 @@ def _parse_tool_call_arguments(arguments: str | None) -> Any:
     except json.JSONDecodeError:
         return {"arguments": arguments}
     return parsed if isinstance(parsed, dict) else {"arguments": parsed}
+
+
+def _tool_call_transcript(name: str, arguments: str | None, call_id: str | None = None) -> str:
+    args = _parse_tool_call_arguments(arguments)
+    call_id_attr = f' tool_call_id="{call_id}"' if call_id else ""
+    return (
+        f'<tool_call name="{name}"{call_id_attr}>\n'
+        f'{json.dumps(args, ensure_ascii=False)}\n'
+        "</tool_call>"
+    )
 
 
 def _image_path_to_part(path: str) -> AistudioPart:
