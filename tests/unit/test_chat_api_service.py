@@ -43,6 +43,55 @@ def test_handle_chat_empty_tools_disables_model_defaults(monkeypatch):
     assert client.calls[0]["kwargs"]["tools"] == []
 
 
+def test_handle_chat_reenables_tools_after_new_user_message(monkeypatch):
+    from aistudio_api.application import api_service_openai
+
+    async def _noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(api_service_openai, "require_busy_lock", lambda: asyncio.Semaphore(1))
+    monkeypatch.setattr(api_service_openai, "ensure_active_account", _noop)
+    monkeypatch.setattr(api_service_openai, "record_rotator_event", lambda *args, **kwargs: None)
+
+    client = _CaptureChatClient()
+    req = ChatRequest(
+        model="gemini-3.5-flash",
+        messages=[
+            {"role": "user", "content": "run date"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "terminal", "arguments": '{"command":"date +%s"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": '{"output":"123"}'},
+            {"role": "user", "content": "进度如何？继续执行"},
+        ],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "terminal",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"command": {"type": "string"}},
+                    },
+                },
+            }
+        ],
+    )
+
+    asyncio.run(handle_chat(req, client))
+
+    assert len(client.calls) == 1
+    assert client.calls[0]["kwargs"]["tools"] != []
+
+
 def test_normalize_chat_request_tool_calls_and_responses():
     from aistudio_api.application.chat_service import normalize_chat_request
     from aistudio_api.api.schemas import Message

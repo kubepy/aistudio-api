@@ -54,10 +54,14 @@ async def handle_chat(req: ChatRequest, client: AIStudioClient):
                     req.stream,
                     attempt + 1,
                 )
-                has_tool_result = any((msg.role or "").lower() == "tool" for msg in req.messages)
-                tools = [] if has_tool_result else (None if req.tools is None else (normalize_openai_tools(req.tools) or []))
+                # Disable tools only for the immediate follow-up turn after a tool
+                # result.  Older tool results in the history must not disable tools
+                # for a new user request; otherwise the model can only emit textual
+                # pseudo-calls like <call:execute_code> instead of real tool_calls.
+                pending_tool_result = _last_non_system_role(req.messages) == "tool"
+                tools = [] if pending_tool_result else (None if req.tools is None else (normalize_openai_tools(req.tools) or []))
 
-                if req.tools is None and not has_tool_result:
+                if req.tools is None and not pending_tool_result:
                     from aistudio_api.infrastructure.gateway.request_rewriter import build_tools_from_names
 
                     model_defaults = resolve_model_defaults(model)
@@ -351,3 +355,11 @@ def _build_streaming_response(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+def _last_non_system_role(messages) -> str:
+    for msg in reversed(messages):
+        role = (msg.role or "").lower()
+        if role not in {"system", "developer"}:
+            return role
+    return ""

@@ -63,7 +63,11 @@ def normalize_chat_request(messages, requested_model: str, tmp_dir: str = "/tmp"
     capture_images: list[str] = []
     cleanup_paths: list[str] = []
     saw_images = False
-    saw_tool_result = any((msg.role or "").lower() == "tool" for msg in messages)
+    completed_tool_call_ids = {
+        msg.tool_call_id
+        for msg in messages
+        if (msg.role or "").lower() == "tool" and msg.tool_call_id
+    }
 
     # Build tool_call_id → function name map from assistant tool_calls
     tool_call_names: dict[str, str] = {}
@@ -108,9 +112,9 @@ def normalize_chat_request(messages, requested_model: str, tmp_dir: str = "/tmp"
         if role == "assistant" and msg.reasoning_content:
             parts.append(AistudioPart(text=msg.reasoning_content, thought=True))
 
-        if role == "assistant" and msg.tool_calls and not saw_tool_result:
+        if role == "assistant" and msg.tool_calls:
             for tc in msg.tool_calls:
-                if not tc.function or not tc.function.name:
+                if not tc.function or not tc.function.name or tc.id in completed_tool_call_ids:
                     continue
                 parts.append(
                     AistudioPart(
