@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 
 import json
 import logging
@@ -1069,6 +1070,52 @@ mw:((hash) => {
             raise RuntimeError(f"replay failed: {raw_text}")
         return status, raw_text.encode("utf-8")
 
+    def _verify_account_identity_sync(self, page) -> None:
+        """校验浏览器实际登录账号与期望账号是否一致，防止 cookies 交叉污染。
+
+        如果不一致，拒绝保存 cookies 并删除 profile 目录。
+        """
+        auth_file = self._auth_file
+        if not auth_file:
+            return
+        meta_path = Path(auth_file).parent / "meta.json"
+        if not meta_path.exists():
+            return
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        expected_email = meta.get("email") or ""
+        if not expected_email:
+            return
+
+        # 从页面获取当前登录状态
+        try:
+            page_html = page.content()
+        except Exception:
+            return
+
+        if expected_email in page_html:
+            return  # 一致，通过校验
+
+        # 不一致 — 防止污染
+        account_id = meta.get("id", "unknown")
+        log.warning(
+            "[account-guard] 页面未登录期望账号 %s (%s)，拒绝保存 cookies 以防交叉污染",
+            expected_email,
+            account_id,
+        )
+        # 删除被污染的 profile 目录
+        if self._profile_dir:
+            profile_path = Path(self._profile_dir)
+            if profile_path.exists():
+                log.warning("[account-guard] 删除被污染的 profile 目录: %s", profile_path)
+                shutil.rmtree(profile_path, ignore_errors=True)
+        raise RuntimeError(
+            f"页面未登录期望的账号 {expected_email} ({account_id})，"
+            f"已删除 profile 缓存，请重新导入该账号的 cookies"
+        )
+
     def _goto_aistudio_sync(self, page) -> None:
         import time as _t
         last_exc = None
@@ -1091,11 +1138,13 @@ mw:((hash) => {
                     has_textarea = page.query_selector("textarea") is not None
                     if has_dms and has_textarea:
                         log.debug(f"[timing] UI ready (dms+textarea) after {_t.time()-_t0:.1f}s")
+                        self._verify_account_identity_sync(page)
                         self._save_cookies_sync()
                         return
                     if has_dms and _ > 20:
                         page.evaluate(DIALOG_CLEANUP_JS)
                 log.debug(f"[timing] UI partially ready after {_t.time()-_t0:.1f}s (dms={has_dms}, textarea={has_textarea})")
+                self._verify_account_identity_sync(page)
                 self._save_cookies_sync()
                 return
             except Exception as exc:
