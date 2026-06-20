@@ -137,6 +137,13 @@ BOTGUARD_BOOTSTRAP_PROMPT = "say '1'"
 TEMPLATE_CAPTURE_PROMPT = "say 't'"
 
 
+def _clear_worker_event_loop() -> None:
+    try:
+        asyncio.set_event_loop(None)
+    except Exception:
+        pass
+
+
 class BrowserSession:
     def __init__(self, port: int):
         self.port = port
@@ -150,7 +157,11 @@ class BrowserSession:
         self._snap_key: str | None = None
         self._templates: dict[str, dict[str, Any]] = {}
         self._bootstrap_template: dict[str, Any] | None = None
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="aistudio-browser")
+        self._executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="aistudio-browser",
+            initializer=_clear_worker_event_loop,
+        )
 
     async def ensure_context(self):
         return await self._run_sync(self._ensure_browser_sync)
@@ -244,6 +255,10 @@ class BrowserSession:
     async def generate_snapshot(self, contents: list[AistudioContent]) -> str:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(self._executor, lambda: self._generate_snapshot_sync(contents))
+
+    async def close(self) -> None:
+        await self._run_sync(self._close_sync)
+        self._executor.shutdown(wait=True, cancel_futures=False)
 
     async def send_hooked_request(self, *, body: str, timeout_ms: int) -> tuple[int, bytes]:
         return await self._run_sync(self._send_hooked_request_sync, body, timeout_ms)
@@ -339,6 +354,8 @@ class BrowserSession:
         _t0 = _t.time()
 
         page, captured_url, captured_headers = self._prepare_streaming_sync()
+        if is_camoufox_engine():
+            captured_headers = {"content-type": "application/json"}
         log.debug(f"[stream] prep done in {_t.time()-_t0:.1f}s, url={captured_url}")
 
         timeout_s = timeout_ms / 1000
@@ -1032,6 +1049,8 @@ mw:((hash) => {
         page = self._ensure_botguard_service_sync()
         log.debug(f"[timing] botguard ready in {_t.time()-_t0:.1f}s")
         captured_url, captured_headers = self._get_captured_info()
+        if is_camoufox_engine():
+            captured_headers = {"content-type": "application/json"}
 
         # Replay via XHR in browser context (same approach as non-streaming replay_v2)
         timeout_s = timeout_ms / 1000
