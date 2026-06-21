@@ -545,4 +545,117 @@ def _extract_pseudo_tool_calls(text: str) -> list[dict]:
             call["call_id"] = call_id
         calls.append(call)
 
+    if calls:
+        return calls
+
+    # Some models emit a malformed, attribute-only transcript such as:
+    #   <tool_call name="execute_code" code="..."}
+    # instead of a complete <tool_call>JSON</tool_call> block.  Recover it so
+    # agent clients still receive a native OpenAI tool_call rather than plain
+    # text.
+    for attrs in _extract_pseudo_tool_call_attrs(text):
+        name = attrs.pop("name", None) or attrs.pop("function", None)
+        if not name:
+            continue
+
+        call_id = attrs.pop("tool_call_id", None) or attrs.pop("id", None) or attrs.pop("call_id", None)
+        if not attrs:
+            continue
+
+        call = {"name": name, "args": attrs}
+        if call_id:
+            call["call_id"] = call_id
+        calls.append(call)
+
     return calls
+
+
+def _extract_pseudo_tool_call_attrs(text: str) -> list[dict[str, str]]:
+    attrs_list: list[dict[str, str]] = []
+    pos = 0
+    marker = "<tool_call"
+
+    while True:
+        start = text.lower().find(marker, pos)
+        if start < 0:
+            break
+
+        i = start + len(marker)
+        attrs: dict[str, str] = {}
+        while i < len(text):
+            while i < len(text) and text[i].isspace():
+                i += 1
+            if i >= len(text) or text[i] == ">" or text[i] == "<":
+                break
+
+            key_match = re.match(r"[A-Za-z_][A-Za-z0-9_\-]*", text[i:])
+            if not key_match:
+                break
+            key = key_match.group(0)
+            i += len(key)
+
+            while i < len(text) and text[i].isspace():
+                i += 1
+            if i >= len(text) or text[i] != "=":
+                break
+            i += 1
+            while i < len(text) and text[i].isspace():
+                i += 1
+
+            if i >= len(text) or text[i] not in {'"', "'"}:
+                break
+            quote = text[i]
+            i += 1
+            if key == "code":
+                # Code snippets can contain many literal quotes.  In malformed
+                # attribute-only transcripts, the code attribute is effectively
+                # the final payload, so read greedily up to the last closing
+                # quote before the optional malformed JSON tail.
+                tail = text[i:]
+                greedy_match = re.match(rf"(.*){re.escape(quote)}\s*\}}?\s*\]?\s*$", tail, re.DOTALL)
+                if greedy_match:
+                    raw_value = greedy_match.group(1)
+                    raw_value = raw_value.replace(r"\"", '"').replace(r"\'", "'")
+                    attrs[key] = _clean_pseudo_tool_attr_value(key, raw_value)
+                    i = len(text)
+                    continue
+
+            escaped = False
+            value_chars: list[str] = []
+            while i < len(text):
+                ch = text[i]
+                if escaped:
+                    value_chars.append(ch)
+                    escaped = False
+                elif ch == "\\":
+                    value_chars.append(ch)
+                    escaped = True
+                elif ch == quote:
+                    break
+                else:
+                    value_chars.append(ch)
+                i += 1
+            if i >= len(text) or text[i] != quote:
+                break
+            raw_value = "".join(value_chars)
+            raw_value = raw_value.replace(r"\"", '"').replace(r"\'", "'")
+            attrs[key] = _clean_pseudo_tool_attr_value(key, raw_value)
+            i += 1
+
+        if attrs:
+            attrs_list.append(attrs)
+        pos = max(i + 1, start + len(marker))
+
+    return attrs_list
+
+
+def _clean_pseudo_tool_attr_value(key: str, value: str) -> str:
+    if key != "code":
+        return value
+
+    lines = value.splitlines()
+    while lines and lines[-1].strip() == "}":
+        lines.pop()
+    if not lines:
+        return ""
+    return "\n".join(lines) + ("\n" if value.endswith("\n") else "")

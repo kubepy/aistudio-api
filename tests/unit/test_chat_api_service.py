@@ -320,3 +320,27 @@ def test_handle_chat_env_google_search_not_auto_added_to_explicit_agent_tools(mo
     tools = client.calls[0]["kwargs"]["tools"]
     assert tools is not None
     assert len(tools) == 1
+
+
+def test_extract_pseudo_tool_call_from_attribute_arguments():
+    from aistudio_api.application.api_service_openai import _extract_pseudo_tool_calls
+
+    text = '''<tool_call name="execute_code" code="
+import json
+
+path = \"/var/home/deck/solutions.json\"
+with open(path, 'r', encoding='utf-8') as f:
+    print(f.read(10))
+}"}
+]'''
+
+    calls = _extract_pseudo_tool_calls(text)
+
+    assert calls == [
+        {
+            "name": "execute_code",
+            "args": {
+                "code": "\nimport json\n\npath = \"/var/home/deck/solutions.json\"\nwith open(path, 'r', encoding='utf-8') as f:\n    print(f.read(10))"
+            },
+        }
+    ]
