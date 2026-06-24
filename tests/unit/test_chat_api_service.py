@@ -361,6 +361,19 @@ def test_detect_incomplete_final_text_markdown_table():
     assert _detect_incomplete_final_text(complete) is None
 
 
+def test_detect_incomplete_final_text_pseudo_tool_call_tag():
+    from aistudio_api.application.api_service_openai import _detect_incomplete_final_text
+
+    tag = "<" + "tool_call"
+    partial = tag + ' name="browser_scroll" tool_call_id="abc123'
+    unclosed = tag + ' name="browser_scroll">{"direction":"down"}'
+    complete = tag + ' name="browser_scroll">{"direction":"down"}</' + "tool_call" + ">"
+
+    assert _detect_incomplete_final_text(partial) == "incomplete_pseudo_tool_call_tag"
+    assert _detect_incomplete_final_text(unclosed) == "unclosed_pseudo_tool_call"
+    assert _detect_incomplete_final_text(complete) is None
+
+
 def test_maybe_continue_incomplete_final_text_requests_one_text_only_continuation():
     from aistudio_api.application.api_service_openai import _maybe_continue_incomplete_final_text
     from aistudio_api.infrastructure.gateway.wire_types import AistudioContent, AistudioPart

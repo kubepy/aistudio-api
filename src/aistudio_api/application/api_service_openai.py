@@ -56,8 +56,8 @@ async def handle_chat(req: ChatRequest, client: AIStudioClient):
             try:
                 # Disable implicit/default tools only for the immediate follow-up
                 # turn after a tool result.  Explicit OpenAI tools must survive so
-                # agent clients such as Hermes can decide whether to call another
-                # tool or finish.
+                # OpenAI-compatible agent clients can decide whether to call
+                # another tool or finish.
                 pending_tool_result = _last_non_system_role(req.messages) == "tool"
                 request_options = _resolve_openai_request_options(req)
                 tools = None if req.tools is None else (normalize_openai_tools(req.tools) or [])
@@ -478,11 +478,11 @@ async def _maybe_continue_incomplete_final_text(
 ) -> str:
     """Try one text-only continuation when the final answer is visibly cut off.
 
-    Some AI Studio/Gemini responses return finish_reason=stop after producing an
+    Some upstream model responses return finish_reason=stop after producing an
     obviously incomplete structured answer, most commonly a Markdown table after
     a successful tool result. This is not a tool-call continuation; it is a
-    narrow text repair. Do not forward Hermes/client tools on the repair request
-    so the agent does not re-enter a tool loop.
+    narrow text repair. Do not forward client tools on the repair request so the
+    agent does not re-enter a tool loop.
     """
 
     reason = _detect_incomplete_final_text(partial_text)
@@ -555,6 +555,10 @@ def _detect_incomplete_final_text(text: str) -> str | None:
     if not stripped:
         return None
 
+    pseudo_reason = _detect_incomplete_pseudo_tool_call(stripped)
+    if pseudo_reason:
+        return pseudo_reason
+
     if stripped.count("```") % 2 == 1:
         return "unclosed_code_fence"
 
@@ -569,6 +573,36 @@ def _detect_incomplete_final_text(text: str) -> str | None:
 
     if _looks_like_unclosed_json(stripped):
         return "unclosed_json"
+
+    return None
+
+
+def _detect_incomplete_pseudo_tool_call(text: str) -> str | None:
+    """Detect model-visible pseudo tool markup that stopped mid-tag.
+
+    This is a narrow guard for cases where the model starts emitting a textual
+    tool invocation but the upstream model service returns finish_reason=stop
+    before the tag is syntactically complete, leaving OpenAI-compatible clients
+    with plain text instead of an executable tool call.
+    """
+
+    tag_name = "<" + "tool_call"
+    close_name = "</" + "tool_call" + ">"
+    last_open = text.rfind(tag_name)
+    if last_open == -1:
+        return None
+    last_close = text.rfind(close_name)
+    if last_close > last_open:
+        return None
+
+    fragment = text[last_open:].strip()
+    if not fragment:
+        return None
+
+    if ">" not in fragment:
+        return "incomplete_pseudo_tool_call_tag"
+    if close_name not in fragment:
+        return "unclosed_pseudo_tool_call"
 
     return None
 
@@ -709,10 +743,10 @@ _PSEUDO_TOOL_ATTR_RE = re.compile(r"(\w+)\s*=\s*(['\"])(.*?)\2", re.DOTALL)
 def _extract_pseudo_tool_calls(text: str) -> list[dict]:
     """Convert textual <tool_call ...>{...}</tool_call> blocks to function calls.
 
-    Gemini occasionally emits the agent tool-call transcript as plain text instead
-    of native function calls.  Agent clients such as Hermes only continue when the
-    OpenAI response contains real tool_calls, so translate complete transcript
-    blocks back into function calls as a compatibility fallback.
+    Some upstream models occasionally emit the agent tool-call transcript as plain
+    text instead of native function calls.  OpenAI-compatible agent clients only
+    continue when the response contains real tool_calls, so translate complete
+    transcript blocks back into function calls as a compatibility fallback.
     """
 
     calls: list[dict] = []
