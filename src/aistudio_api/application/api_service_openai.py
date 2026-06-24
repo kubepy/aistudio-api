@@ -427,8 +427,26 @@ def _build_streaming_response(
                         )
                         if continuation_text:
                             buffered_body.append(continuation_text)
-                        for body_chunk in buffered_body:
-                            yield sse_chunk(chat_id, model, body_chunk, include_usage=include_usage)
+                            continued_body_text = "".join(buffered_body)
+                            pseudo_tool_calls = _extract_pseudo_tool_calls(continued_body_text)
+                            if pseudo_tool_calls:
+                                saw_tool_calls = True
+                                logger.info(
+                                    "OpenAI stream pseudo tool_calls converted after continuation: model=%s, count=%d, names=%s",
+                                    model,
+                                    len(pseudo_tool_calls),
+                                    [str(call.get("name") or "") for call in pseudo_tool_calls[:10]],
+                                )
+                                yield sse_chunk(
+                                    chat_id,
+                                    model,
+                                    "",
+                                    tool_calls=to_openai_tool_calls(pseudo_tool_calls, include_index=True),
+                                    include_usage=include_usage,
+                                )
+                        if not saw_tool_calls:
+                            for body_chunk in buffered_body:
+                                yield sse_chunk(chat_id, model, body_chunk, include_usage=include_usage)
                 logger.info(
                     "OpenAI stream finish: model=%s, finish_reason=%s, final_usage=%s",
                     model,
@@ -520,7 +538,7 @@ async def _maybe_continue_incomplete_final_text(
             max_tokens=max_tokens,
             tools=None,
             safety_settings=safety_settings,
-            generation_config_overrides=generation_config_overrides,
+            generation_config_overrides=_continuation_generation_config_overrides(generation_config_overrides),
             force_refresh_capture=False,
         ):
             event_counts[str(event_type)] = event_counts.get(str(event_type), 0) + 1
@@ -555,7 +573,7 @@ async def _maybe_continue_incomplete_final_text(
                 max_tokens=max_tokens,
                 tools=None,
                 safety_settings=safety_settings,
-                generation_config_overrides=generation_config_overrides,
+                generation_config_overrides=_continuation_generation_config_overrides(generation_config_overrides),
                 sanitize_plain_text=True,
             )
             continuation_text = output.text or ""
@@ -584,12 +602,27 @@ async def _maybe_continue_incomplete_final_text(
 
 
 def _continuation_prompt(reason: str) -> str:
+    if reason in {"incomplete_pseudo_tool_call_tag", "unclosed_pseudo_tool_call"}:
+        return (
+            "上一个回答在文本形式的工具调用标签中途停止了。"
+            f"检测原因：{reason}。"
+            "请只补全这个工具调用标签和参数，使其成为完整可解析的格式。"
+            "不要解释，不要重复已经输出的前缀，不要输出其他正文。"
+        )
     return (
         "上一个回答在结构化输出中途停止了。"
         f"检测原因：{reason}。"
         "请从中断处继续完成剩余内容，不要重复已经输出的内容，"
         "不要调用工具，不要重新生成开头。"
     )
+
+
+def _continuation_generation_config_overrides(generation_config_overrides: dict | None) -> dict[str, object | None]:
+    """Use direct visible-text generation for repair requests."""
+
+    overrides: dict[str, object | None] = dict(generation_config_overrides or {})
+    overrides["thinking_config"] = None
+    return overrides
 
 
 def _detect_incomplete_final_text(text: str) -> str | None:
