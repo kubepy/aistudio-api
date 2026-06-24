@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 
 import json
 import logging
@@ -136,6 +137,13 @@ BOTGUARD_BOOTSTRAP_PROMPT = "say '1'"
 TEMPLATE_CAPTURE_PROMPT = "say 't'"
 
 
+def _clear_worker_event_loop() -> None:
+    try:
+        asyncio.set_event_loop(None)
+    except Exception:
+        pass
+
+
 class BrowserSession:
     def __init__(self, port: int):
         self.port = port
@@ -149,7 +157,11 @@ class BrowserSession:
         self._snap_key: str | None = None
         self._templates: dict[str, dict[str, Any]] = {}
         self._bootstrap_template: dict[str, Any] | None = None
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="aistudio-browser")
+        self._executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="aistudio-browser",
+            initializer=_clear_worker_event_loop,
+        )
 
     async def ensure_context(self):
         return await self._run_sync(self._ensure_browser_sync)
@@ -243,6 +255,10 @@ class BrowserSession:
     async def generate_snapshot(self, contents: list[AistudioContent]) -> str:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(self._executor, lambda: self._generate_snapshot_sync(contents))
+
+    async def close(self) -> None:
+        await self._run_sync(self._close_sync)
+        self._executor.shutdown(wait=True, cancel_futures=False)
 
     async def send_hooked_request(self, *, body: str, timeout_ms: int) -> tuple[int, bytes]:
         return await self._run_sync(self._send_hooked_request_sync, body, timeout_ms)
@@ -338,6 +354,8 @@ class BrowserSession:
         _t0 = _t.time()
 
         page, captured_url, captured_headers = self._prepare_streaming_sync()
+        if is_camoufox_engine():
+            captured_headers = {"content-type": "application/json"}
         log.debug(f"[stream] prep done in {_t.time()-_t0:.1f}s, url={captured_url}")
 
         timeout_s = timeout_ms / 1000
@@ -1031,6 +1049,8 @@ mw:((hash) => {
         page = self._ensure_botguard_service_sync()
         log.debug(f"[timing] botguard ready in {_t.time()-_t0:.1f}s")
         captured_url, captured_headers = self._get_captured_info()
+        if is_camoufox_engine():
+            captured_headers = {"content-type": "application/json"}
 
         # Replay via XHR in browser context (same approach as non-streaming replay_v2)
         timeout_s = timeout_ms / 1000
@@ -1069,6 +1089,52 @@ mw:((hash) => {
             raise RuntimeError(f"replay failed: {raw_text}")
         return status, raw_text.encode("utf-8")
 
+    def _verify_account_identity_sync(self, page) -> None:
+        """校验浏览器实际登录账号与期望账号是否一致，防止 cookies 交叉污染。
+
+        如果不一致，拒绝保存 cookies 并删除 profile 目录。
+        """
+        auth_file = self._auth_file
+        if not auth_file:
+            return
+        meta_path = Path(auth_file).parent / "meta.json"
+        if not meta_path.exists():
+            return
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        expected_email = meta.get("email") or ""
+        if not expected_email:
+            return
+
+        # 从页面获取当前登录状态
+        try:
+            page_html = page.content()
+        except Exception:
+            return
+
+        if expected_email in page_html:
+            return  # 一致，通过校验
+
+        # 不一致 — 防止污染
+        account_id = meta.get("id", "unknown")
+        log.warning(
+            "[account-guard] 页面未登录期望账号 %s (%s)，拒绝保存 cookies 以防交叉污染",
+            expected_email,
+            account_id,
+        )
+        # 删除被污染的 profile 目录
+        if self._profile_dir:
+            profile_path = Path(self._profile_dir)
+            if profile_path.exists():
+                log.warning("[account-guard] 删除被污染的 profile 目录: %s", profile_path)
+                shutil.rmtree(profile_path, ignore_errors=True)
+        raise RuntimeError(
+            f"页面未登录期望的账号 {expected_email} ({account_id})，"
+            f"已删除 profile 缓存，请重新导入该账号的 cookies"
+        )
+
     def _goto_aistudio_sync(self, page) -> None:
         import time as _t
         last_exc = None
@@ -1091,11 +1157,13 @@ mw:((hash) => {
                     has_textarea = page.query_selector("textarea") is not None
                     if has_dms and has_textarea:
                         log.debug(f"[timing] UI ready (dms+textarea) after {_t.time()-_t0:.1f}s")
+                        self._verify_account_identity_sync(page)
                         self._save_cookies_sync()
                         return
                     if has_dms and _ > 20:
                         page.evaluate(DIALOG_CLEANUP_JS)
                 log.debug(f"[timing] UI partially ready after {_t.time()-_t0:.1f}s (dms={has_dms}, textarea={has_textarea})")
+                self._verify_account_identity_sync(page)
                 self._save_cookies_sync()
                 return
             except Exception as exc:

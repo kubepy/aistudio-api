@@ -193,14 +193,24 @@ class AccountStore:
         account_id: str | None = None,
     ) -> AccountMeta:
         """保存新账号。"""
+        registry = self._load_registry()
+        now = datetime.now(timezone.utc).isoformat()
+        created_at = now
+        if account_id is None and email:
+            for acc in registry.accounts.values():
+                if acc.email == email:
+                    account_id = acc.id
+                    created_at = acc.created_at
+                    break
+
         if account_id is None:
             account_id = _generate_account_id()
-        now = datetime.now(timezone.utc).isoformat()
+
         meta = AccountMeta(
             id=account_id,
             name=name,
             email=email,
-            created_at=now,
+            created_at=created_at,
             last_used=now,
         )
         account_dir = self._accounts_dir / account_id
@@ -214,7 +224,6 @@ class AccountStore:
             json.dumps(meta.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
         )
         # 更新注册表
-        registry = self._load_registry()
         registry.accounts[account_id] = meta
         if registry.active_account_id is None:
             registry.active_account_id = account_id

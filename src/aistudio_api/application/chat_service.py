@@ -384,6 +384,33 @@ def _filter_default_tools_for_model(tool_names: tuple[str, ...], *, is_image_mod
     return [name for name in names if name in allowed]
 
 
+# 内置搜索工具的覆盖关系：复合工具覆盖其组成部分，去重时据此跳过被覆盖的窄工具。
+_BUILTIN_TOOL_COVERS = {
+    "google_search_and_image_search": ("google_search", "image_search"),
+}
+
+
+def _drop_covered_builtin_tools(names: list[str], seen: set[str]) -> list[str]:
+    """从 names 去掉已被 ``seen`` 覆盖或被同批 names 覆盖的内置工具。
+
+    例如 seen 含 google_search_and_image_search 时，google_search 被视为冗余跳过；
+    同一批 names 里两者并存时也只保留复合工具。
+    """
+    have: set[str] = set(seen)
+    result: list[str] = []
+    for name in names:
+        if name in have:
+            continue
+        if any(
+            name in subs and sup in have
+            for sup, subs in _BUILTIN_TOOL_COVERS.items()
+        ):
+            continue
+        result.append(name)
+        have.add(name)
+    return result
+
+
 _GEMINI_SAFETY_CATEGORY_MAP = {
     "HARM_CATEGORY_HARASSMENT": 7,
     "HARM_CATEGORY_HATE_SPEECH": 8,
@@ -766,6 +793,7 @@ def normalize_gemini_request(req, requested_model: str, tmp_dir: str = "/tmp") -
 
     model_defaults = resolve_model_defaults(model)
     tools = None
+    seen_builtin: set[str] = set()
     if req.tools is not None:
         tools = []
         for tool in req.tools:
@@ -789,13 +817,21 @@ def normalize_gemini_request(req, requested_model: str, tmp_dir: str = "/tmp") -
                         is_image_model=model_defaults.is_image_model,
                     )
                 )
+                seen_builtin.update(builtin_tool_names)
 
-    if req.tools is None and model_defaults.default_tools:
+    # 注入 config.yaml 的 default_tools（内置工具，如 google_search）。
+    #   req.tools is None → 客户端没传 tools，注入（原行为）
+    #   req.tools 非空    → 客户端带了自定义工具，也合并 default_tools
+    #                       （之前被跳过，导致模型想用内置工具时不可用）
+    #   req.tools == []   → 客户端明确禁用所有工具，跳过（保留"空数组=禁用"语义）
+    if model_defaults.default_tools and not (req.tools is not None and len(req.tools) == 0):
         default_tool_names = _filter_default_tools_for_model(
             model_defaults.default_tools,
             is_image_model=model_defaults.is_image_model,
         )
-        tools = (
+        # 去重：跳过请求已显式声明的内置工具，并按覆盖关系去掉被复合工具覆盖的窄工具
+        default_tool_names = _drop_covered_builtin_tools(default_tool_names, seen_builtin)
+        injected = (
             build_tools_from_names(
                 default_tool_names,
                 model=model,
@@ -804,6 +840,10 @@ def normalize_gemini_request(req, requested_model: str, tmp_dir: str = "/tmp") -
             if default_tool_names
             else []
         )
+        if tools is None:
+            tools = injected
+        else:
+            tools.extend(injected)
 
     generation_config = req.generationConfig
     generation_config_overrides = {
