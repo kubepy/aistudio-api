@@ -636,8 +636,16 @@ async def _maybe_continue_incomplete_final_text(
             len(current_text),
         )
         if _is_incomplete_pseudo_tool_call_reason(final_reason):
-            return _unrepaired_pseudo_tool_call_notice(), True
-        return _unrepaired_incomplete_final_text_notice(), True
+            return _unrepaired_pseudo_tool_call_notice(
+                reason=final_reason,
+                repairs=len(continuations),
+                chars=len(current_text),
+            ), True
+        return _unrepaired_incomplete_final_text_notice(
+            reason=final_reason,
+            repairs=len(continuations),
+            chars=len(current_text),
+        ), True
     return "".join(continuations), False
 
 
@@ -645,17 +653,20 @@ def _is_incomplete_pseudo_tool_call_reason(reason: str) -> bool:
     return reason in {"incomplete_pseudo_tool_call_tag", "unclosed_pseudo_tool_call"}
 
 
-def _unrepaired_pseudo_tool_call_notice() -> str:
+def _unrepaired_pseudo_tool_call_notice(*, reason: str, repairs: int, chars: int) -> str:
     return (
         "模型生成了一个未完整的工具调用，系统已阻止将半截工具参数作为普通文本输出。"
-        "请重新发送“继续”，或让任务从最近一步重新执行。"
+        f"\n\n诊断信息：reason={reason}，repair_attempts={repairs}，suppressed_chars={chars}。"
+        "\n建议：请重新发送“继续”，或让任务从最近一步重新执行。"
     )
 
 
-def _unrepaired_incomplete_final_text_notice() -> str:
+def _unrepaired_incomplete_final_text_notice(*, reason: str, repairs: int, chars: int) -> str:
     return (
         "模型生成的最终预览未能完整完成，系统已阻止将半截 Markdown/结构化内容继续输出。"
-        "如果任务已经通过工具写入了文件，请以文件内容为准；也可以重新发送“继续”让任务从最近一步恢复。"
+        f"\n\n诊断信息：reason={reason}，repair_attempts={repairs}，suppressed_chars={chars}。"
+        "\n处理结果：半截预览内容已被隐藏，避免误导或破坏 Markdown 显示。"
+        "\n建议：如果任务已经通过工具写入了文件，请以文件内容为准；也可以重新发送“继续”让任务从最近一步恢复。"
     )
 
 
