@@ -525,11 +525,11 @@ async def _maybe_continue_incomplete_final_text(
         len(partial_text),
     )
 
-    continuation_contents = [
-        *contents,
-        AistudioContent(role="model", parts=[AistudioPart(text=partial_text)]),
-        AistudioContent(role="user", parts=[AistudioPart(text=_continuation_prompt(reason))]),
-    ]
+    continuation_contents = _compact_continuation_contents(
+        contents=contents,
+        partial_text=partial_text,
+        reason=reason,
+    )
     chunks: list[str] = []
     event_counts: dict[str, int] = {}
     try:
@@ -538,11 +538,7 @@ async def _maybe_continue_incomplete_final_text(
             capture_prompt=capture_prompt,
             capture_images=capture_images,
             contents=continuation_contents,
-            system_instruction_content=(
-                AistudioContent(role="user", parts=[AistudioPart(text=system_instruction)])
-                if system_instruction
-                else None
-            ),
+            system_instruction_content=None,
             temperature=temperature,
             top_p=top_p,
             top_k=top_k,
@@ -573,11 +569,7 @@ async def _maybe_continue_incomplete_final_text(
                 capture_prompt=capture_prompt,
                 capture_images=capture_images,
                 contents=continuation_contents,
-                system_instruction_content=(
-                    AistudioContent(role="user", parts=[AistudioPart(text=system_instruction)])
-                    if system_instruction
-                    else None
-                ),
+                system_instruction_content=None,
                 temperature=temperature,
                 top_p=top_p,
                 top_k=top_k,
@@ -626,6 +618,52 @@ def _continuation_prompt(reason: str) -> str:
         "请从中断处继续完成剩余内容，不要重复已经输出的内容，"
         "不要调用工具，不要重新生成开头。"
     )
+
+
+def _compact_continuation_contents(
+    *,
+    contents: list[AistudioContent],
+    partial_text: str,
+    reason: str,
+) -> list[AistudioContent]:
+    """Build a compact repair prompt instead of replaying the full conversation."""
+
+    context_text = _latest_repair_context_text(contents)
+    sections: list[str] = []
+    if context_text:
+        sections.append(
+            "最近一次工具结果或上下文如下，仅用于补全上一个中断输出：\n"
+            + _trim_repair_context(context_text)
+        )
+    sections.append("上一个回答已经输出到这里：\n" + partial_text)
+    sections.append(_continuation_prompt(reason))
+    return [AistudioContent(role="user", parts=[AistudioPart(text="\n\n".join(sections))])]
+
+
+def _latest_repair_context_text(contents: list[AistudioContent]) -> str:
+    """Return the latest useful textual context for a final-answer repair."""
+
+    fallback = ""
+    for content in reversed(contents):
+        text_parts = [part.text for part in content.parts if getattr(part, "text", None)]
+        if not text_parts:
+            continue
+        text = "\n".join(text_parts).strip()
+        if not text:
+            continue
+        if "<tool_result" in text or '"snapshot"' in text or "snapshot:" in text:
+            return text
+        if not fallback:
+            fallback = text
+    return fallback
+
+
+def _trim_repair_context(text: str, limit: int = 60000) -> str:
+    if len(text) <= limit:
+        return text
+    head = limit // 2
+    tail = limit - head
+    return text[:head] + "\n\n[... repair context truncated ...]\n\n" + text[-tail:]
 
 
 def _continuation_generation_config_overrides(generation_config_overrides: dict | None) -> dict[str, object | None]:

@@ -442,10 +442,12 @@ def test_maybe_continue_incomplete_final_text_requests_one_text_only_continuatio
     assert len(client.calls) == 1
     kwargs = client.calls[0]["kwargs"]
     assert kwargs["tools"] is None
-    assert kwargs["contents"][-2].role == "model"
-    assert kwargs["contents"][-2].parts[0].text == partial
-    assert kwargs["contents"][-1].role == "user"
-    assert "不要调用工具" in kwargs["contents"][-1].parts[0].text
+    assert len(kwargs["contents"]) == 1
+    assert kwargs["contents"][0].role == "user"
+    repair_prompt = kwargs["contents"][0].parts[0].text
+    assert "列出item1结果" in repair_prompt
+    assert partial in repair_prompt
+    assert "不要调用工具" in repair_prompt
 
 
 def test_maybe_continue_incomplete_final_text_ignores_complete_table():
