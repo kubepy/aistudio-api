@@ -62,7 +62,11 @@ async def handle_chat(req: ChatRequest, client: AIStudioClient):
                 request_options = _resolve_openai_request_options(req)
                 tools = None if req.tools is None else (normalize_openai_tools(req.tools) or [])
 
-                if req.tools is None and not pending_tool_result:
+                if (
+                    req.tools is None
+                    and not pending_tool_result
+                    and not _is_context_summarization_request(normalized["capture_prompt"])
+                ):
                     from aistudio_api.infrastructure.gateway.request_rewriter import build_tools_from_names
 
                     model_defaults = resolve_model_defaults(model)
@@ -476,6 +480,13 @@ def _build_streaming_response(
 def _remove_google_search_tool_names(tool_names: list[str]) -> list[str]:
     search_tools = {"google_search", "google_search_and_image_search", "image_search"}
     return [name for name in tool_names if name not in search_tools]
+
+
+def _is_context_summarization_request(capture_prompt: str) -> bool:
+    """Detect client-side context-compression prompts that should stay tool-free."""
+
+    prompt = capture_prompt.strip().lower()
+    return "summarization agent" in prompt and "creating a context" in prompt
 
 
 async def _maybe_continue_incomplete_final_text(

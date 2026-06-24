@@ -322,6 +322,34 @@ def test_handle_chat_env_google_search_not_auto_added_to_explicit_agent_tools(mo
     assert len(tools) == 1
 
 
+def test_handle_chat_env_google_search_skipped_for_context_summarization(monkeypatch):
+    from aistudio_api.application import api_service_openai
+
+    async def _noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(api_service_openai, "require_busy_lock", lambda: asyncio.Semaphore(1))
+    monkeypatch.setattr(api_service_openai, "ensure_active_account", _noop)
+    monkeypatch.setattr(api_service_openai, "record_rotator_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(api_service_openai.settings, "openai_default_google_search", True)
+
+    client = _CaptureChatClient()
+    req = ChatRequest(
+        model="gemini-3.5-flash",
+        messages=[
+            {
+                "role": "user",
+                "content": "You are a summarization agent creating a context summary for later turns.",
+            }
+        ],
+    )
+
+    asyncio.run(handle_chat(req, client))
+
+    assert len(client.calls) == 1
+    assert client.calls[0]["kwargs"]["tools"] is None
+
+
 def test_extract_pseudo_tool_call_from_attribute_arguments():
     from aistudio_api.application.api_service_openai import _extract_pseudo_tool_calls
 
