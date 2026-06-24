@@ -718,10 +718,18 @@ def _trim_repair_context(text: str, limit: int = 60000) -> str:
 
 
 def _continuation_generation_config_overrides(generation_config_overrides: dict | None) -> dict[str, object | None]:
-    """Use direct visible-text generation for repair requests."""
+    """Use direct visible-text generation for repair requests.
+
+    Repair prompts should produce a short visible continuation instead of spending
+    the response budget on hidden reasoning.  Do not inherit a global high
+    thinking default here.
+    """
 
     overrides: dict[str, object | None] = dict(generation_config_overrides or {})
-    overrides["thinking_config"] = None
+    overrides["thinking_config"] = AistudioThinkingConfig(
+        level=ThinkingLevel.MINIMAL,
+        mode=1,
+    ).to_wire()
     return overrides
 
 

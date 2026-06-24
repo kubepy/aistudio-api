@@ -517,6 +517,7 @@ def test_maybe_continue_incomplete_final_text_repairs_promised_row_shortfall():
     )
 
     assert continuation == (
+        "\n"
         "| 15 | title 15 | https://example.test/15 |\n"
         "| 16 | title 16 | https://example.test/16 |\n"
         "| 17 | title 17 | https://example.test/17 |\n"
