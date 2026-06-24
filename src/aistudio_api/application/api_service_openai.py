@@ -410,6 +410,23 @@ def _build_streaming_response(
                             include_usage=include_usage,
                         )
                     else:
+                        continuation_text = await _maybe_continue_incomplete_final_text(
+                            client=client,
+                            model=model,
+                            capture_prompt=capture_prompt,
+                            capture_images=capture_images,
+                            contents=contents,
+                            system_instruction=system_instruction,
+                            partial_text=body_text,
+                            temperature=temperature,
+                            top_p=top_p,
+                            top_k=top_k,
+                            max_tokens=max_tokens,
+                            safety_settings=safety_settings,
+                            generation_config_overrides=generation_config_overrides,
+                        )
+                        if continuation_text:
+                            buffered_body.append(continuation_text)
                         for body_chunk in buffered_body:
                             yield sse_chunk(chat_id, model, body_chunk, include_usage=include_usage)
                 logger.info(
@@ -441,6 +458,180 @@ def _build_streaming_response(
 def _remove_google_search_tool_names(tool_names: list[str]) -> list[str]:
     search_tools = {"google_search", "google_search_and_image_search", "image_search"}
     return [name for name in tool_names if name not in search_tools]
+
+
+async def _maybe_continue_incomplete_final_text(
+    *,
+    client: AIStudioClient,
+    model: str,
+    capture_prompt: str,
+    capture_images: list[str] | None,
+    contents: list[AistudioContent],
+    system_instruction: str | None,
+    partial_text: str,
+    temperature: float | None,
+    top_p: float | None,
+    top_k: int | None,
+    max_tokens: int | None,
+    safety_settings: list[list] | None,
+    generation_config_overrides: dict | None,
+) -> str:
+    """Try one text-only continuation when the final answer is visibly cut off.
+
+    Some AI Studio/Gemini responses return finish_reason=stop after producing an
+    obviously incomplete structured answer, most commonly a Markdown table after
+    a successful tool result. This is not a tool-call continuation; it is a
+    narrow text repair. Do not forward Hermes/client tools on the repair request
+    so the agent does not re-enter a tool loop.
+    """
+
+    reason = _detect_incomplete_final_text(partial_text)
+    if not reason:
+        return ""
+
+    logger.warning(
+        "OpenAI stream incomplete final text detected: model=%s, reason=%s, chars=%d; requesting one continuation",
+        model,
+        reason,
+        len(partial_text),
+    )
+
+    continuation_contents = [
+        *contents,
+        AistudioContent(role="model", parts=[AistudioPart(text=partial_text)]),
+        AistudioContent(role="user", parts=[AistudioPart(text=_continuation_prompt(reason))]),
+    ]
+    chunks: list[str] = []
+    try:
+        async for event_type, text in client.stream_generate_content(
+            model=model,
+            capture_prompt=capture_prompt,
+            capture_images=capture_images,
+            contents=continuation_contents,
+            system_instruction_content=(
+                AistudioContent(role="user", parts=[AistudioPart(text=system_instruction)])
+                if system_instruction
+                else None
+            ),
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            max_tokens=max_tokens,
+            tools=None,
+            safety_settings=safety_settings,
+            generation_config_overrides=generation_config_overrides,
+            force_refresh_capture=False,
+        ):
+            if event_type == "body" and text:
+                chunks.append(str(text))
+    except Exception as exc:
+        logger.warning("OpenAI stream incomplete final text continuation failed: model=%s, error=%s", model, exc)
+        return ""
+
+    continuation_text = "".join(chunks)
+    if continuation_text:
+        logger.info(
+            "OpenAI stream incomplete final text continued: model=%s, reason=%s, chars=%d",
+            model,
+            reason,
+            len(continuation_text),
+        )
+    return continuation_text
+
+
+def _continuation_prompt(reason: str) -> str:
+    return (
+        "上一个回答在结构化输出中途停止了。"
+        f"检测原因：{reason}。"
+        "请从中断处继续完成剩余内容，不要重复已经输出的内容，"
+        "不要调用工具，不要重新生成开头。"
+    )
+
+
+def _detect_incomplete_final_text(text: str) -> str | None:
+    """Return a reason if final visible text appears obviously incomplete."""
+
+    stripped = text.rstrip()
+    if not stripped:
+        return None
+
+    if stripped.count("```") % 2 == 1:
+        return "unclosed_code_fence"
+
+    table_reason = _detect_incomplete_markdown_table(stripped)
+    if table_reason:
+        return table_reason
+    if _ends_with_complete_markdown_table_row(stripped):
+        return None
+
+    if stripped.endswith(("|", ",", "{", "[", "(", "（", "、", "，", ":", "：")):
+        return "dangling_terminal"
+
+    if _looks_like_unclosed_json(stripped):
+        return "unclosed_json"
+
+    return None
+
+
+def _detect_incomplete_markdown_table(text: str) -> str | None:
+    lines = [line.rstrip() for line in text.splitlines() if line.strip()]
+    if len(lines) < 2:
+        return None
+
+    table_indexes = [idx for idx, line in enumerate(lines) if line.lstrip().startswith("|")]
+    if len(table_indexes) < 2:
+        return None
+
+    last_line = lines[-1]
+    if last_line.lstrip().startswith("|"):
+        header_idx = table_indexes[0]
+        header_cols = _markdown_table_column_count(lines[header_idx])
+        last_cols = _markdown_table_column_count(last_line)
+        if header_cols >= 2 and last_cols < header_cols:
+            return "incomplete_markdown_table_row"
+        if not last_line.rstrip().endswith("|"):
+            return "unterminated_markdown_table_row"
+
+    if len(table_indexes) >= 2 and lines[table_indexes[-1]].strip() in {"|", "||"}:
+        return "empty_markdown_table_row"
+
+    return None
+
+
+def _markdown_table_column_count(line: str) -> int:
+    stripped = line.strip()
+    if stripped.startswith("|"):
+        stripped = stripped[1:]
+    if stripped.endswith("|"):
+        stripped = stripped[:-1]
+    if not stripped:
+        return 0
+    return len(stripped.split("|"))
+
+
+def _ends_with_complete_markdown_table_row(text: str) -> bool:
+    lines = [line.rstrip() for line in text.splitlines() if line.strip()]
+    table_lines = [line for line in lines if line.lstrip().startswith("|")]
+    if len(table_lines) < 2:
+        return False
+    last_line = lines[-1]
+    if not last_line.lstrip().startswith("|") or not last_line.rstrip().endswith("|"):
+        return False
+
+    header_cols = _markdown_table_column_count(table_lines[0])
+    last_cols = _markdown_table_column_count(last_line)
+    return header_cols >= 2 and last_cols >= header_cols
+
+
+def _looks_like_unclosed_json(text: str) -> bool:
+    first = text.lstrip()[:1]
+    if first not in {"{", "["}:
+        return False
+    try:
+        json.loads(text)
+        return False
+    except json.JSONDecodeError:
+        return True
 
 
 def _request_field_set(req: ChatRequest, field: str) -> bool:

@@ -344,3 +344,103 @@ with open(path, 'r', encoding='utf-8') as f:
             },
         }
     ]
+
+
+def test_detect_incomplete_final_text_markdown_table():
+    from aistudio_api.application.api_service_openai import _detect_incomplete_final_text
+
+    incomplete = """| 标题 | 链接 | 摘要 |
+| --- | --- | --- |
+| item1 | https://example.test/topic/1 |"""
+
+    complete = """| 标题 | 链接 | 摘要 |
+| --- | --- | --- |
+| item1 | https://example.test/topic/1 | 完整摘要 |"""
+
+    assert _detect_incomplete_final_text(incomplete) == "incomplete_markdown_table_row"
+    assert _detect_incomplete_final_text(complete) is None
+
+
+def test_maybe_continue_incomplete_final_text_requests_one_text_only_continuation():
+    from aistudio_api.application.api_service_openai import _maybe_continue_incomplete_final_text
+    from aistudio_api.infrastructure.gateway.wire_types import AistudioContent, AistudioPart
+
+    class _ContinuationClient:
+        def __init__(self):
+            self.calls = []
+
+        async def stream_generate_content(self, *args, **kwargs):
+            self.calls.append({"args": args, "kwargs": kwargs})
+            yield "body", " 继续的表格内容 |\n"
+            yield "usage", {"completion_tokens": 3}
+
+    client = _ContinuationClient()
+    partial = """| 标题 | 链接 | 摘要 |
+| --- | --- | --- |
+| item1 | https://example.test/topic/1 |"""
+
+    continuation = asyncio.run(
+        _maybe_continue_incomplete_final_text(
+            client=client,
+            model="gemini-3.5-flash",
+            capture_prompt="prompt",
+            capture_images=None,
+            contents=[AistudioContent(role="user", parts=[AistudioPart(text="列出item1结果")])],
+            system_instruction=None,
+            partial_text=partial,
+            temperature=None,
+            top_p=None,
+            top_k=None,
+            max_tokens=None,
+            safety_settings=None,
+            generation_config_overrides=None,
+        )
+    )
+
+    assert continuation == " 继续的表格内容 |\n"
+    assert len(client.calls) == 1
+    kwargs = client.calls[0]["kwargs"]
+    assert kwargs["tools"] is None
+    assert kwargs["contents"][-2].role == "model"
+    assert kwargs["contents"][-2].parts[0].text == partial
+    assert kwargs["contents"][-1].role == "user"
+    assert "不要调用工具" in kwargs["contents"][-1].parts[0].text
+
+
+def test_maybe_continue_incomplete_final_text_ignores_complete_table():
+    from aistudio_api.application.api_service_openai import _maybe_continue_incomplete_final_text
+    from aistudio_api.infrastructure.gateway.wire_types import AistudioContent, AistudioPart
+
+    class _ContinuationClient:
+        def __init__(self):
+            self.calls = []
+
+        async def stream_generate_content(self, *args, **kwargs):
+            self.calls.append({"args": args, "kwargs": kwargs})
+            yield "body", "should not be called"
+
+    client = _ContinuationClient()
+    complete = """| 标题 | 链接 | 摘要 |
+| --- | --- | --- |
+| item1 | https://example.test/topic/1 | 完整摘要 |"""
+
+    continuation = asyncio.run(
+        _maybe_continue_incomplete_final_text(
+            client=client,
+            model="gemini-3.5-flash",
+            capture_prompt="prompt",
+            capture_images=None,
+            contents=[AistudioContent(role="user", parts=[AistudioPart(text="列出item1结果")])],
+            system_instruction=None,
+            partial_text=complete,
+            temperature=None,
+            top_p=None,
+            top_k=None,
+            max_tokens=None,
+            safety_settings=None,
+            generation_config_overrides=None,
+        )
+    )
+
+    assert continuation == ""
+    assert client.calls == []
