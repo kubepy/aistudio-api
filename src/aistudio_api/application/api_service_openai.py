@@ -502,6 +502,7 @@ async def _maybe_continue_incomplete_final_text(
         AistudioContent(role="user", parts=[AistudioPart(text=_continuation_prompt(reason))]),
     ]
     chunks: list[str] = []
+    event_counts: dict[str, int] = {}
     try:
         async for event_type, text in client.stream_generate_content(
             model=model,
@@ -522,6 +523,7 @@ async def _maybe_continue_incomplete_final_text(
             generation_config_overrides=generation_config_overrides,
             force_refresh_capture=False,
         ):
+            event_counts[str(event_type)] = event_counts.get(str(event_type), 0) + 1
             if event_type == "body" and text:
                 chunks.append(str(text))
     except Exception as exc:
@@ -529,12 +531,54 @@ async def _maybe_continue_incomplete_final_text(
         return ""
 
     continuation_text = "".join(chunks)
+    if not continuation_text:
+        logger.warning(
+            "OpenAI stream incomplete final text continuation produced no body: model=%s, reason=%s, events=%s; retrying non-stream",
+            model,
+            reason,
+            event_counts,
+        )
+        try:
+            output = await client.generate_content(
+                model=model,
+                capture_prompt=capture_prompt,
+                capture_images=capture_images,
+                contents=continuation_contents,
+                system_instruction_content=(
+                    AistudioContent(role="user", parts=[AistudioPart(text=system_instruction)])
+                    if system_instruction
+                    else None
+                ),
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                max_tokens=max_tokens,
+                tools=None,
+                safety_settings=safety_settings,
+                generation_config_overrides=generation_config_overrides,
+                sanitize_plain_text=True,
+            )
+            continuation_text = output.text or ""
+        except Exception as exc:
+            logger.warning(
+                "OpenAI stream incomplete final text non-stream continuation failed: model=%s, error=%s",
+                model,
+                exc,
+            )
+            return ""
+
     if continuation_text:
         logger.info(
             "OpenAI stream incomplete final text continued: model=%s, reason=%s, chars=%d",
             model,
             reason,
             len(continuation_text),
+        )
+    else:
+        logger.warning(
+            "OpenAI stream incomplete final text continuation still empty: model=%s, reason=%s",
+            model,
+            reason,
         )
     return continuation_text
 
