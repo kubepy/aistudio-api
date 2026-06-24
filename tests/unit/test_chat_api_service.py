@@ -409,6 +409,13 @@ def test_detect_incomplete_final_text_promised_markdown_rows_shortfall():
     assert _detect_incomplete_final_text(short_table) == "short_markdown_table_rows:20:14"
     assert _detect_incomplete_final_text(full_table) is None
 
+    range_heading_without_rows = """### 224-242条 追加数据预览：
+
+| 序号 | 标题 | URL |
+| :--- | :--- | :--- |"""
+
+    assert _detect_incomplete_final_text(range_heading_without_rows) == "short_markdown_table_rows:19:0"
+
 
 def test_detect_incomplete_final_text_pseudo_tool_call_tag():
     from aistudio_api.application.api_service_openai import _detect_incomplete_final_text

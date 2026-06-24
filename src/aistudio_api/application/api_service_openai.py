@@ -828,7 +828,7 @@ def _detect_promised_markdown_table_shortfall(text: str) -> str | None:
         return None
 
     actual = _markdown_table_data_row_count(text)
-    if actual <= 0:
+    if actual <= 0 and not _has_markdown_table_header(text):
         return None
     if actual < expected:
         return f"short_markdown_table_rows:{expected}:{actual}"
@@ -836,11 +836,22 @@ def _detect_promised_markdown_table_shortfall(text: str) -> str | None:
 
 
 def _promised_table_row_count(text: str) -> int | None:
+    candidates: list[int] = []
+    for match in re.finditer(r"(\d{1,4})\s*[-~～—－]\s*(\d{1,4})\s*条", text):
+        try:
+            start = int(match.group(1))
+            end = int(match.group(2))
+        except ValueError:
+            continue
+        if start <= end:
+            count = end - start + 1
+            if 2 <= count <= 100:
+                candidates.append(count)
+
     patterns = (
         r"(?:继续显示|显示|列出|输出|整理|返回|提供|前|后|最近)\s*(\d{1,3})\s*条",
         r"(\d{1,3})\s*条(?:结果|记录|帖子|条目)",
     )
-    candidates: list[int] = []
     for pattern in patterns:
         for match in re.finditer(pattern, text):
             try:
@@ -854,6 +865,13 @@ def _promised_table_row_count(text: str) -> int | None:
     return max(candidates)
 
 
+def _has_markdown_table_header(text: str) -> bool:
+    lines = [line.strip() for line in text.splitlines() if line.strip().startswith("|")]
+    if len(lines) < 2:
+        return False
+    return any(_is_markdown_table_separator(line) for line in lines[1:])
+
+
 def _markdown_table_data_row_count(text: str) -> int:
     lines = [line.strip() for line in text.splitlines() if line.strip().startswith("|")]
     if len(lines) < 2:
@@ -862,11 +880,16 @@ def _markdown_table_data_row_count(text: str) -> int:
     data_rows = 0
     for line in lines[1:]:
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
-        if cells and all(cell and set(cell) <= {"-", ":"} for cell in cells):
+        if _is_markdown_table_separator(line):
             continue
         if _markdown_table_column_count(line) >= 2:
             data_rows += 1
     return data_rows
+
+
+def _is_markdown_table_separator(line: str) -> bool:
+    cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+    return bool(cells) and all(cell and set(cell) <= {"-", ":"} for cell in cells)
 
 
 def _parse_markdown_table_shortfall_reason(reason: str) -> tuple[int, int] | None:
