@@ -612,6 +612,19 @@ def _continuation_prompt(reason: str) -> str:
             "请只补全这个工具调用标签和参数，使其成为完整可解析的格式。"
             "不要解释，不要重复已经输出的前缀，不要输出其他正文。"
         )
+
+    shortfall = _parse_markdown_table_shortfall_reason(reason)
+    if shortfall is not None:
+        expected, actual = shortfall
+        missing = max(expected - actual, 1)
+        return (
+            "上一个回答承诺输出 Markdown 表格条目，但实际表格行数不足。"
+            f"检测原因：{reason}。"
+            f"请根据最近一次工具结果，只补齐缺少的剩余 {missing} 条，"
+            f"不要重复已经输出的 {actual} 条，继续使用同一张 Markdown 表格格式。"
+            "不要调用工具，不要重新生成开头，不要输出解释。"
+        )
+
     return (
         "上一个回答在结构化输出中途停止了。"
         f"检测原因：{reason}。"
@@ -691,6 +704,11 @@ def _detect_incomplete_final_text(text: str) -> str | None:
     table_reason = _detect_incomplete_markdown_table(stripped)
     if table_reason:
         return table_reason
+
+    short_table_reason = _detect_promised_markdown_table_shortfall(stripped)
+    if short_table_reason:
+        return short_table_reason
+
     if _ends_with_complete_markdown_table_row(stripped):
         return None
 
@@ -756,6 +774,66 @@ def _detect_incomplete_markdown_table(text: str) -> str | None:
         return "empty_markdown_table_row"
 
     return None
+
+
+def _detect_promised_markdown_table_shortfall(text: str) -> str | None:
+    expected = _promised_table_row_count(text)
+    if expected is None or expected <= 0:
+        return None
+
+    actual = _markdown_table_data_row_count(text)
+    if actual <= 0:
+        return None
+    if actual < expected:
+        return f"short_markdown_table_rows:{expected}:{actual}"
+    return None
+
+
+def _promised_table_row_count(text: str) -> int | None:
+    patterns = (
+        r"(?:继续显示|显示|列出|输出|整理|返回|提供|前|后|最近)\s*(\d{1,3})\s*条",
+        r"(\d{1,3})\s*条(?:结果|记录|帖子|条目)",
+    )
+    candidates: list[int] = []
+    for pattern in patterns:
+        for match in re.finditer(pattern, text):
+            try:
+                value = int(match.group(1))
+            except ValueError:
+                continue
+            if 2 <= value <= 100:
+                candidates.append(value)
+    if not candidates:
+        return None
+    return max(candidates)
+
+
+def _markdown_table_data_row_count(text: str) -> int:
+    lines = [line.strip() for line in text.splitlines() if line.strip().startswith("|")]
+    if len(lines) < 2:
+        return 0
+
+    data_rows = 0
+    for line in lines[1:]:
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if cells and all(cell and set(cell) <= {"-", ":"} for cell in cells):
+            continue
+        if _markdown_table_column_count(line) >= 2:
+            data_rows += 1
+    return data_rows
+
+
+def _parse_markdown_table_shortfall_reason(reason: str) -> tuple[int, int] | None:
+    prefix = "short_markdown_table_rows:"
+    if not reason.startswith(prefix):
+        return None
+    parts = reason[len(prefix) :].split(":")
+    if len(parts) != 2:
+        return None
+    try:
+        return int(parts[0]), int(parts[1])
+    except ValueError:
+        return None
 
 
 def _markdown_table_column_count(line: str) -> int:

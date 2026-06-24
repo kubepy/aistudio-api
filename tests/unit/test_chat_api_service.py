@@ -389,6 +389,27 @@ def test_detect_incomplete_final_text_markdown_table():
     assert _detect_incomplete_final_text(complete) is None
 
 
+def test_detect_incomplete_final_text_promised_markdown_rows_shortfall():
+    from aistudio_api.application.api_service_openai import _detect_incomplete_final_text
+
+    rows = "\n".join(f"| {idx} | title {idx} | https://example.test/{idx} |" for idx in range(1, 15))
+    short_table = f"""以下继续显示20条结果：
+
+| # | 标题 | URL |
+|---|------|-----|
+{rows}"""
+
+    full_rows = "\n".join(f"| {idx} | title {idx} | https://example.test/{idx} |" for idx in range(1, 21))
+    full_table = f"""以下继续显示20条结果：
+
+| # | 标题 | URL |
+|---|------|-----|
+{full_rows}"""
+
+    assert _detect_incomplete_final_text(short_table) == "short_markdown_table_rows:20:14"
+    assert _detect_incomplete_final_text(full_table) is None
+
+
 def test_detect_incomplete_final_text_pseudo_tool_call_tag():
     from aistudio_api.application.api_service_openai import _detect_incomplete_final_text
 
@@ -448,6 +469,51 @@ def test_maybe_continue_incomplete_final_text_requests_one_text_only_continuatio
     assert "列出item1结果" in repair_prompt
     assert partial in repair_prompt
     assert "不要调用工具" in repair_prompt
+
+
+def test_maybe_continue_incomplete_final_text_repairs_promised_row_shortfall():
+    from aistudio_api.application.api_service_openai import _maybe_continue_incomplete_final_text
+    from aistudio_api.infrastructure.gateway.wire_types import AistudioContent, AistudioPart
+
+    class _ContinuationClient:
+        def __init__(self):
+            self.calls = []
+
+        async def stream_generate_content(self, *args, **kwargs):
+            self.calls.append({"args": args, "kwargs": kwargs})
+            yield "body", "| 15 | title 15 | https://example.test/15 |\n"
+
+    client = _ContinuationClient()
+    rows = "\n".join(f"| {idx} | title {idx} | https://example.test/{idx} |" for idx in range(1, 15))
+    partial = f"""以下继续显示20条结果：
+
+| # | 标题 | URL |
+|---|------|-----|
+{rows}"""
+
+    continuation = asyncio.run(
+        _maybe_continue_incomplete_final_text(
+            client=client,
+            model="gemini-3.5-flash",
+            capture_prompt="prompt",
+            capture_images=None,
+            contents=[AistudioContent(role="user", parts=[AistudioPart(text="工具结果包含20条item结果")])],
+            system_instruction=None,
+            partial_text=partial,
+            temperature=None,
+            top_p=None,
+            top_k=None,
+            max_tokens=None,
+            safety_settings=None,
+            generation_config_overrides=None,
+        )
+    )
+
+    assert continuation == "| 15 | title 15 | https://example.test/15 |\n"
+    repair_prompt = client.calls[0]["kwargs"]["contents"][0].parts[0].text
+    assert "缺少的剩余 6 条" in repair_prompt
+    assert "不要重复已经输出的 14 条" in repair_prompt
+    assert "工具结果包含20条item结果" in repair_prompt
 
 
 def test_maybe_continue_incomplete_final_text_ignores_complete_table():
