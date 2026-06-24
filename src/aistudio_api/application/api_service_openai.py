@@ -519,12 +519,15 @@ async def _maybe_continue_incomplete_final_text(
 
     current_text = partial_text
     continuations: list[str] = []
+    attempted_repairs = 0
+    last_repair_error: str | None = None
     max_repair_attempts = max(1, min(settings.openai_repair_max_attempts, 10))
 
     for repair_attempt in range(1, max_repair_attempts + 1):
         reason = _detect_incomplete_final_text(current_text)
         if not reason:
             break
+        attempted_repairs = repair_attempt
 
         logger.warning(
             "OpenAI stream incomplete final text detected: model=%s, reason=%s, chars=%d, repair_attempt=%d/%d; requesting continuation",
@@ -562,6 +565,7 @@ async def _maybe_continue_incomplete_final_text(
                 if event_type == "body" and text:
                     chunks.append(str(text))
         except Exception as exc:
+            last_repair_error = _repair_error_label(exc)
             logger.warning("OpenAI stream incomplete final text continuation failed: model=%s, error=%s", model, exc)
             break
 
@@ -591,6 +595,7 @@ async def _maybe_continue_incomplete_final_text(
                 )
                 continuation_text = output.text or ""
             except Exception as exc:
+                last_repair_error = _repair_error_label(exc)
                 logger.warning(
                     "OpenAI stream incomplete final text non-stream continuation failed: model=%s, error=%s",
                     model,
@@ -599,6 +604,7 @@ async def _maybe_continue_incomplete_final_text(
                 break
 
         if not continuation_text:
+            last_repair_error = "empty_body"
             logger.warning(
                 "OpenAI stream incomplete final text continuation still empty: model=%s, reason=%s, repair_attempt=%d/%d; trying next repair attempt",
                 model,
@@ -610,6 +616,7 @@ async def _maybe_continue_incomplete_final_text(
 
         continuation_text = _join_repair_continuation(current_text, continuation_text)
         continuations.append(continuation_text)
+        last_repair_error = None
         current_text += continuation_text
         logger.info(
             "OpenAI stream incomplete final text continued: model=%s, reason=%s, chars=%d, repair_attempt=%d/%d",
@@ -638,34 +645,101 @@ async def _maybe_continue_incomplete_final_text(
         if _is_incomplete_pseudo_tool_call_reason(final_reason):
             return _unrepaired_pseudo_tool_call_notice(
                 reason=final_reason,
-                repairs=len(continuations),
+                attempted_repairs=attempted_repairs,
+                max_repair_attempts=max_repair_attempts,
+                successful_repairs=len(continuations),
                 chars=len(current_text),
+                last_error=last_repair_error,
             ), True
         return _unrepaired_incomplete_final_text_notice(
             reason=final_reason,
-            repairs=len(continuations),
+            attempted_repairs=attempted_repairs,
+            max_repair_attempts=max_repair_attempts,
+            successful_repairs=len(continuations),
             chars=len(current_text),
+            last_error=last_repair_error,
         ), True
     return "".join(continuations), False
+
+
+def _repair_error_label(exc: Exception) -> str:
+    message = str(exc).lower()
+    if "quota" in message:
+        return "quota_exceeded"
+    if "429" in message or "rate limit" in message or "rate_limited" in message:
+        return "rate_limited"
+    return type(exc).__name__
 
 
 def _is_incomplete_pseudo_tool_call_reason(reason: str) -> bool:
     return reason in {"incomplete_pseudo_tool_call_tag", "unclosed_pseudo_tool_call"}
 
 
-def _unrepaired_pseudo_tool_call_notice(*, reason: str, repairs: int, chars: int) -> str:
+def _repair_diagnostics_text(
+    *,
+    reason: str,
+    attempted_repairs: int,
+    max_repair_attempts: int,
+    successful_repairs: int,
+    chars: int,
+    last_error: str | None,
+) -> str:
+    fields = [
+        f"reason={reason}",
+        f"attempted_repairs={attempted_repairs}/{max_repair_attempts}",
+        f"successful_repairs={successful_repairs}",
+        f"suppressed_chars={chars}",
+    ]
+    if last_error:
+        fields.append(f"last_error={last_error}")
+    return "诊断信息：" + "，".join(fields) + "。"
+
+
+def _unrepaired_pseudo_tool_call_notice(
+    *,
+    reason: str,
+    attempted_repairs: int,
+    max_repair_attempts: int,
+    successful_repairs: int,
+    chars: int,
+    last_error: str | None,
+) -> str:
     return (
         "模型生成了一个未完整的工具调用，系统已阻止将半截工具参数作为普通文本输出。"
-        f"\n\n诊断信息：reason={reason}，repair_attempts={repairs}，suppressed_chars={chars}。"
-        "\n建议：请重新发送“继续”，或让任务从最近一步重新执行。"
+        "\n\n"
+        + _repair_diagnostics_text(
+            reason=reason,
+            attempted_repairs=attempted_repairs,
+            max_repair_attempts=max_repair_attempts,
+            successful_repairs=successful_repairs,
+            chars=chars,
+            last_error=last_error,
+        )
+        + "\n建议：请重新发送“继续”，或让任务从最近一步重新执行。"
     )
 
 
-def _unrepaired_incomplete_final_text_notice(*, reason: str, repairs: int, chars: int) -> str:
+def _unrepaired_incomplete_final_text_notice(
+    *,
+    reason: str,
+    attempted_repairs: int,
+    max_repair_attempts: int,
+    successful_repairs: int,
+    chars: int,
+    last_error: str | None,
+) -> str:
     return (
         "模型生成的最终预览未能完整完成，系统已阻止将半截 Markdown/结构化内容继续输出。"
-        f"\n\n诊断信息：reason={reason}，repair_attempts={repairs}，suppressed_chars={chars}。"
-        "\n处理结果：半截预览内容已被隐藏，避免误导或破坏 Markdown 显示。"
+        "\n\n"
+        + _repair_diagnostics_text(
+            reason=reason,
+            attempted_repairs=attempted_repairs,
+            max_repair_attempts=max_repair_attempts,
+            successful_repairs=successful_repairs,
+            chars=chars,
+            last_error=last_error,
+        )
+        + "\n处理结果：半截预览内容已被隐藏，避免误导或破坏 Markdown 显示。"
         "\n建议：如果任务已经通过工具写入了文件，请以文件内容为准；也可以重新发送“继续”让任务从最近一步恢复。"
     )
 

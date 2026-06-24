@@ -720,6 +720,60 @@ def test_maybe_continue_incomplete_final_text_suppresses_unrepaired_pseudo_tool_
 
     assert replace_buffered_body is True
     assert "未完整的工具调用" in continuation
+    assert "attempted_repairs=2/2" in continuation
+    assert "successful_repairs=2" in continuation
+    assert "repair_attempts=" not in continuation
     assert "<tool_call" not in continuation
     assert "print(1)" not in continuation
     assert len(client.calls) == 2
+
+
+def test_unrepaired_notice_reports_attempts_when_no_continuation_succeeds(monkeypatch):
+    from aistudio_api.application import api_service_openai
+    from aistudio_api.application.api_service_openai import _maybe_continue_incomplete_final_text
+    from aistudio_api.infrastructure.gateway.wire_types import AistudioContent, AistudioPart
+
+    monkeypatch.setattr(api_service_openai.settings, "openai_repair_max_attempts", 3)
+
+    class _ContinuationClient:
+        def __init__(self):
+            self.stream_calls = []
+            self.generate_calls = []
+
+        async def stream_generate_content(self, *args, **kwargs):
+            self.stream_calls.append({"args": args, "kwargs": kwargs})
+            if False:
+                yield "body", ""
+
+        async def generate_content(self, *args, **kwargs):
+            self.generate_calls.append({"args": args, "kwargs": kwargs})
+            raise RuntimeError("Quota exceeded for quota metric")
+
+    client = _ContinuationClient()
+    partial = '<tool_call name="execute_code" tool_call_id="call_1">{"code":"print(1)'
+
+    continuation, replace_buffered_body = asyncio.run(
+        _maybe_continue_incomplete_final_text(
+            client=client,
+            model="gemini-3.5-flash",
+            capture_prompt="prompt",
+            capture_images=None,
+            contents=[AistudioContent(role="user", parts=[AistudioPart(text="run code")])],
+            system_instruction=None,
+            partial_text=partial,
+            temperature=None,
+            top_p=None,
+            top_k=None,
+            max_tokens=None,
+            safety_settings=None,
+            generation_config_overrides=None,
+        )
+    )
+
+    assert replace_buffered_body is True
+    assert "attempted_repairs=1/3" in continuation
+    assert "successful_repairs=0" in continuation
+    assert "last_error=quota_exceeded" in continuation
+    assert "repair_attempts=" not in continuation
+    assert len(client.stream_calls) == 1
+    assert len(client.generate_calls) == 1
