@@ -211,6 +211,7 @@ class Settings:
     openai_default_thinking: str | None = _load_env("AISTUDIO_OPENAI_DEFAULT_THINKING")
     openai_default_google_search: bool | None = _load_optional_bool_env("AISTUDIO_OPENAI_DEFAULT_GOOGLE_SEARCH")
     openai_default_safety_off: bool = _load_bool_env("AISTUDIO_OPENAI_DEFAULT_SAFETY_OFF", default=False)
+    openai_repair_max_attempts: int = _load_int_env("AISTUDIO_OPENAI_REPAIR_MAX_ATTEMPTS", default=5)
 
     @property
     def camoufox_port(self) -> int:

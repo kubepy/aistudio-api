@@ -516,7 +516,7 @@ async def _maybe_continue_incomplete_final_text(
 
     current_text = partial_text
     continuations: list[str] = []
-    max_repair_attempts = 3
+    max_repair_attempts = max(1, min(settings.openai_repair_max_attempts, 10))
 
     for repair_attempt in range(1, max_repair_attempts + 1):
         reason = _detect_incomplete_final_text(current_text)
@@ -638,7 +638,7 @@ def _join_repair_continuation(current_text: str, continuation_text: str) -> str:
         and _ends_with_complete_markdown_table_row(current_text)
         and continuation_text.lstrip().startswith("|")
     ):
-        return "\n" + continuation_text
+        return "\n" + continuation_text.lstrip("\r\n")
     return continuation_text
 
 
