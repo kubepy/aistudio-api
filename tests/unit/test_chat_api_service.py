@@ -636,8 +636,9 @@ def test_maybe_continue_incomplete_final_text_respects_repair_attempt_limit(monk
         )
     )
 
-    assert continuation == "\n| 3 | title 3 | https://example.test/3 |\n"
-    assert replace_buffered_body is False
+    assert "最终预览未能完整完成" in continuation
+    assert "| 3 | title 3" not in continuation
+    assert replace_buffered_body is True
     assert len(client.calls) == 1
 
 
