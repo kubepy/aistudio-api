@@ -505,7 +505,7 @@ async def _maybe_continue_incomplete_final_text(
     safety_settings: list[list] | None,
     generation_config_overrides: dict | None,
 ) -> str:
-    """Try one text-only continuation when the final answer is visibly cut off.
+    """Try bounded text-only continuations when the final answer is visibly cut off.
 
     Some upstream model responses return finish_reason=stop after producing an
     obviously incomplete structured answer, most commonly a Markdown table after
@@ -514,57 +514,33 @@ async def _maybe_continue_incomplete_final_text(
     agent does not re-enter a tool loop.
     """
 
-    reason = _detect_incomplete_final_text(partial_text)
-    if not reason:
-        return ""
+    current_text = partial_text
+    continuations: list[str] = []
+    max_repair_attempts = 3
 
-    logger.warning(
-        "OpenAI stream incomplete final text detected: model=%s, reason=%s, chars=%d; requesting one continuation",
-        model,
-        reason,
-        len(partial_text),
-    )
+    for repair_attempt in range(1, max_repair_attempts + 1):
+        reason = _detect_incomplete_final_text(current_text)
+        if not reason:
+            break
 
-    continuation_contents = _compact_continuation_contents(
-        contents=contents,
-        partial_text=partial_text,
-        reason=reason,
-    )
-    chunks: list[str] = []
-    event_counts: dict[str, int] = {}
-    try:
-        async for event_type, text in client.stream_generate_content(
-            model=model,
-            capture_prompt=capture_prompt,
-            capture_images=capture_images,
-            contents=continuation_contents,
-            system_instruction_content=None,
-            temperature=temperature,
-            top_p=top_p,
-            top_k=top_k,
-            max_tokens=max_tokens,
-            tools=None,
-            safety_settings=safety_settings,
-            generation_config_overrides=_continuation_generation_config_overrides(generation_config_overrides),
-            force_refresh_capture=False,
-        ):
-            event_counts[str(event_type)] = event_counts.get(str(event_type), 0) + 1
-            if event_type == "body" and text:
-                chunks.append(str(text))
-    except Exception as exc:
-        logger.warning("OpenAI stream incomplete final text continuation failed: model=%s, error=%s", model, exc)
-        return ""
-
-    continuation_text = "".join(chunks)
-    if not continuation_text:
         logger.warning(
-            "OpenAI stream incomplete final text continuation produced no body: model=%s, reason=%s, events=%s; retrying non-stream",
+            "OpenAI stream incomplete final text detected: model=%s, reason=%s, chars=%d, repair_attempt=%d/%d; requesting continuation",
             model,
             reason,
-            event_counts,
+            len(current_text),
+            repair_attempt,
+            max_repair_attempts,
         )
+
+        continuation_contents = _compact_continuation_contents(
+            contents=contents,
+            partial_text=current_text,
+            reason=reason,
+        )
+        chunks: list[str] = []
+        event_counts: dict[str, int] = {}
         try:
-            output = await client.generate_content(
+            async for event_type, text in client.stream_generate_content(
                 model=model,
                 capture_prompt=capture_prompt,
                 capture_images=capture_images,
@@ -577,30 +553,92 @@ async def _maybe_continue_incomplete_final_text(
                 tools=None,
                 safety_settings=safety_settings,
                 generation_config_overrides=_continuation_generation_config_overrides(generation_config_overrides),
-                sanitize_plain_text=True,
-            )
-            continuation_text = output.text or ""
+                force_refresh_capture=False,
+            ):
+                event_counts[str(event_type)] = event_counts.get(str(event_type), 0) + 1
+                if event_type == "body" and text:
+                    chunks.append(str(text))
         except Exception as exc:
-            logger.warning(
-                "OpenAI stream incomplete final text non-stream continuation failed: model=%s, error=%s",
-                model,
-                exc,
-            )
-            return ""
+            logger.warning("OpenAI stream incomplete final text continuation failed: model=%s, error=%s", model, exc)
+            break
 
-    if continuation_text:
+        continuation_text = "".join(chunks)
+        if not continuation_text:
+            logger.warning(
+                "OpenAI stream incomplete final text continuation produced no body: model=%s, reason=%s, events=%s; retrying non-stream",
+                model,
+                reason,
+                event_counts,
+            )
+            try:
+                output = await client.generate_content(
+                    model=model,
+                    capture_prompt=capture_prompt,
+                    capture_images=capture_images,
+                    contents=continuation_contents,
+                    system_instruction_content=None,
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                    max_tokens=max_tokens,
+                    tools=None,
+                    safety_settings=safety_settings,
+                    generation_config_overrides=_continuation_generation_config_overrides(generation_config_overrides),
+                    sanitize_plain_text=True,
+                )
+                continuation_text = output.text or ""
+            except Exception as exc:
+                logger.warning(
+                    "OpenAI stream incomplete final text non-stream continuation failed: model=%s, error=%s",
+                    model,
+                    exc,
+                )
+                break
+
+        if not continuation_text:
+            logger.warning(
+                "OpenAI stream incomplete final text continuation still empty: model=%s, reason=%s, repair_attempt=%d/%d",
+                model,
+                reason,
+                repair_attempt,
+                max_repair_attempts,
+            )
+            break
+
+        continuation_text = _join_repair_continuation(current_text, continuation_text)
+        continuations.append(continuation_text)
+        current_text += continuation_text
         logger.info(
-            "OpenAI stream incomplete final text continued: model=%s, reason=%s, chars=%d",
+            "OpenAI stream incomplete final text continued: model=%s, reason=%s, chars=%d, repair_attempt=%d/%d",
             model,
             reason,
             len(continuation_text),
+            repair_attempt,
+            max_repair_attempts,
         )
-    else:
+
+    final_reason = _detect_incomplete_final_text(current_text)
+    if final_reason and continuations:
         logger.warning(
-            "OpenAI stream incomplete final text continuation still empty: model=%s, reason=%s",
+            "OpenAI stream incomplete final text remains incomplete after repair: model=%s, reason=%s, chars=%d, repairs=%d",
             model,
-            reason,
+            final_reason,
+            len(current_text),
+            len(continuations),
         )
+    return "".join(continuations)
+
+
+def _join_repair_continuation(current_text: str, continuation_text: str) -> str:
+    """Join repair text without accidentally merging Markdown table rows."""
+
+    if (
+        continuation_text
+        and not current_text.endswith(("\n", "\r"))
+        and _ends_with_complete_markdown_table_row(current_text)
+        and continuation_text.lstrip().startswith("|")
+    ):
+        return "\n" + continuation_text
     return continuation_text
 
 

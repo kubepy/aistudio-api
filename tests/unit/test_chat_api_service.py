@@ -481,7 +481,14 @@ def test_maybe_continue_incomplete_final_text_repairs_promised_row_shortfall():
 
         async def stream_generate_content(self, *args, **kwargs):
             self.calls.append({"args": args, "kwargs": kwargs})
-            yield "body", "| 15 | title 15 | https://example.test/15 |\n"
+            if len(self.calls) == 1:
+                yield "body", "| 15 | title 15 | https://example.test/15 |\n"
+                yield "body", "| 16 | title 16 | https://example.test/16 |\n"
+                yield "body", "| 17 | title 17 | https://example.test/17 |\n"
+            else:
+                yield "body", "| 18 | title 18 | https://example.test/18 |\n"
+                yield "body", "| 19 | title 19 | https://example.test/19 |\n"
+                yield "body", "| 20 | title 20 | https://example.test/20 |\n"
 
     client = _ContinuationClient()
     rows = "\n".join(f"| {idx} | title {idx} | https://example.test/{idx} |" for idx in range(1, 15))
@@ -509,11 +516,72 @@ def test_maybe_continue_incomplete_final_text_repairs_promised_row_shortfall():
         )
     )
 
-    assert continuation == "| 15 | title 15 | https://example.test/15 |\n"
+    assert continuation == (
+        "| 15 | title 15 | https://example.test/15 |\n"
+        "| 16 | title 16 | https://example.test/16 |\n"
+        "| 17 | title 17 | https://example.test/17 |\n"
+        "| 18 | title 18 | https://example.test/18 |\n"
+        "| 19 | title 19 | https://example.test/19 |\n"
+        "| 20 | title 20 | https://example.test/20 |\n"
+    )
+    assert len(client.calls) == 2
     repair_prompt = client.calls[0]["kwargs"]["contents"][0].parts[0].text
     assert "缺少的剩余 6 条" in repair_prompt
     assert "不要重复已经输出的 14 条" in repair_prompt
     assert "工具结果包含20条item结果" in repair_prompt
+
+
+def test_maybe_continue_incomplete_final_text_rechecks_after_first_repair():
+    from aistudio_api.application.api_service_openai import _maybe_continue_incomplete_final_text
+    from aistudio_api.infrastructure.gateway.wire_types import AistudioContent, AistudioPart
+
+    class _ContinuationClient:
+        def __init__(self):
+            self.calls = []
+
+        async def stream_generate_content(self, *args, **kwargs):
+            self.calls.append({"args": args, "kwargs": kwargs})
+            if len(self.calls) == 1:
+                yield "body", " |\n"
+            else:
+                yield "body", "| 3 | title 3 | https://example.test/3 |\n"
+                yield "body", "| 4 | title 4 | https://example.test/4 |\n"
+
+    client = _ContinuationClient()
+    partial = """以下是前4条预览：
+
+| # | 标题 | URL |
+|---|------|-----|
+| 1 | title 1 | https://example.test/1 |
+| 2 | title 2 | https://example.test/2"""
+
+    continuation = asyncio.run(
+        _maybe_continue_incomplete_final_text(
+            client=client,
+            model="gemini-3.5-flash",
+            capture_prompt="prompt",
+            capture_images=None,
+            contents=[AistudioContent(role="user", parts=[AistudioPart(text="工具结果包含4条item结果")])],
+            system_instruction=None,
+            partial_text=partial,
+            temperature=None,
+            top_p=None,
+            top_k=None,
+            max_tokens=None,
+            safety_settings=None,
+            generation_config_overrides=None,
+        )
+    )
+
+    assert continuation == (
+        " |\n"
+        "| 3 | title 3 | https://example.test/3 |\n"
+        "| 4 | title 4 | https://example.test/4 |\n"
+    )
+    assert len(client.calls) == 2
+    second_prompt = client.calls[1]["kwargs"]["contents"][0].parts[0].text
+    assert "缺少的剩余 2 条" in second_prompt
+    assert "不要重复已经输出的 2 条" in second_prompt
 
 
 def test_maybe_continue_incomplete_final_text_ignores_complete_table():
