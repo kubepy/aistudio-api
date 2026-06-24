@@ -597,13 +597,13 @@ async def _maybe_continue_incomplete_final_text(
 
         if not continuation_text:
             logger.warning(
-                "OpenAI stream incomplete final text continuation still empty: model=%s, reason=%s, repair_attempt=%d/%d",
+                "OpenAI stream incomplete final text continuation still empty: model=%s, reason=%s, repair_attempt=%d/%d; trying next repair attempt",
                 model,
                 reason,
                 repair_attempt,
                 max_repair_attempts,
             )
-            break
+            continue
 
         continuation_text = _join_repair_continuation(current_text, continuation_text)
         continuations.append(continuation_text)
