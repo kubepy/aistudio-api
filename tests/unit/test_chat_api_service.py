@@ -448,7 +448,7 @@ def test_maybe_continue_incomplete_final_text_requests_one_text_only_continuatio
 | --- | --- | --- |
 | item1 | https://example.test/topic/1 |"""
 
-    continuation = asyncio.run(
+    continuation, replace_buffered_body = asyncio.run(
         _maybe_continue_incomplete_final_text(
             client=client,
             model="gemini-3.5-flash",
@@ -467,6 +467,7 @@ def test_maybe_continue_incomplete_final_text_requests_one_text_only_continuatio
     )
 
     assert continuation == " 继续的表格内容 |\n"
+    assert replace_buffered_body is False
     assert len(client.calls) == 1
     kwargs = client.calls[0]["kwargs"]
     assert kwargs["tools"] is None
@@ -505,7 +506,7 @@ def test_maybe_continue_incomplete_final_text_repairs_promised_row_shortfall():
 |---|------|-----|
 {rows}"""
 
-    continuation = asyncio.run(
+    continuation, replace_buffered_body = asyncio.run(
         _maybe_continue_incomplete_final_text(
             client=client,
             model="gemini-3.5-flash",
@@ -532,6 +533,7 @@ def test_maybe_continue_incomplete_final_text_repairs_promised_row_shortfall():
         "| 19 | title 19 | https://example.test/19 |\n"
         "| 20 | title 20 | https://example.test/20 |\n"
     )
+    assert replace_buffered_body is False
     assert len(client.calls) == 2
     repair_prompt = client.calls[0]["kwargs"]["contents"][0].parts[0].text
     assert "缺少的剩余 6 条" in repair_prompt
@@ -563,7 +565,7 @@ def test_maybe_continue_incomplete_final_text_rechecks_after_first_repair():
 | 1 | title 1 | https://example.test/1 |
 | 2 | title 2 | https://example.test/2"""
 
-    continuation = asyncio.run(
+    continuation, replace_buffered_body = asyncio.run(
         _maybe_continue_incomplete_final_text(
             client=client,
             model="gemini-3.5-flash",
@@ -586,6 +588,7 @@ def test_maybe_continue_incomplete_final_text_rechecks_after_first_repair():
         "| 3 | title 3 | https://example.test/3 |\n"
         "| 4 | title 4 | https://example.test/4 |\n"
     )
+    assert replace_buffered_body is False
     assert len(client.calls) == 2
     second_prompt = client.calls[1]["kwargs"]["contents"][0].parts[0].text
     assert "缺少的剩余 2 条" in second_prompt
@@ -615,7 +618,7 @@ def test_maybe_continue_incomplete_final_text_respects_repair_attempt_limit(monk
 | 1 | title 1 | https://example.test/1 |
 | 2 | title 2 | https://example.test/2 |"""
 
-    continuation = asyncio.run(
+    continuation, replace_buffered_body = asyncio.run(
         _maybe_continue_incomplete_final_text(
             client=client,
             model="gemini-3.5-flash",
@@ -634,6 +637,7 @@ def test_maybe_continue_incomplete_final_text_respects_repair_attempt_limit(monk
     )
 
     assert continuation == "\n| 3 | title 3 | https://example.test/3 |\n"
+    assert replace_buffered_body is False
     assert len(client.calls) == 1
 
 
@@ -654,7 +658,7 @@ def test_maybe_continue_incomplete_final_text_ignores_complete_table():
 | --- | --- | --- |
 | item1 | https://example.test/topic/1 | 完整摘要 |"""
 
-    continuation = asyncio.run(
+    continuation, replace_buffered_body = asyncio.run(
         _maybe_continue_incomplete_final_text(
             client=client,
             model="gemini-3.5-flash",
@@ -673,4 +677,48 @@ def test_maybe_continue_incomplete_final_text_ignores_complete_table():
     )
 
     assert continuation == ""
+    assert replace_buffered_body is False
     assert client.calls == []
+
+
+def test_maybe_continue_incomplete_final_text_suppresses_unrepaired_pseudo_tool_call(monkeypatch):
+    from aistudio_api.application import api_service_openai
+    from aistudio_api.application.api_service_openai import _maybe_continue_incomplete_final_text
+    from aistudio_api.infrastructure.gateway.wire_types import AistudioContent, AistudioPart
+
+    monkeypatch.setattr(api_service_openai.settings, "openai_repair_max_attempts", 2)
+
+    class _ContinuationClient:
+        def __init__(self):
+            self.calls = []
+
+        async def stream_generate_content(self, *args, **kwargs):
+            self.calls.append({"args": args, "kwargs": kwargs})
+            yield "body", "still unfinished"
+
+    client = _ContinuationClient()
+    partial = '<tool_call name="execute_code" tool_call_id="call_1">{"code":"print(1)'
+
+    continuation, replace_buffered_body = asyncio.run(
+        _maybe_continue_incomplete_final_text(
+            client=client,
+            model="gemini-3.5-flash",
+            capture_prompt="prompt",
+            capture_images=None,
+            contents=[AistudioContent(role="user", parts=[AistudioPart(text="run code")])],
+            system_instruction=None,
+            partial_text=partial,
+            temperature=None,
+            top_p=None,
+            top_k=None,
+            max_tokens=None,
+            safety_settings=None,
+            generation_config_overrides=None,
+        )
+    )
+
+    assert replace_buffered_body is True
+    assert "未完整的工具调用" in continuation
+    assert "<tool_call" not in continuation
+    assert "print(1)" not in continuation
+    assert len(client.calls) == 2

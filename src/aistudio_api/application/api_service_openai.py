@@ -414,7 +414,7 @@ def _build_streaming_response(
                             include_usage=include_usage,
                         )
                     else:
-                        continuation_text = await _maybe_continue_incomplete_final_text(
+                        continuation_text, replace_buffered_body = await _maybe_continue_incomplete_final_text(
                             client=client,
                             model=model,
                             capture_prompt=capture_prompt,
@@ -430,9 +430,12 @@ def _build_streaming_response(
                             generation_config_overrides=generation_config_overrides,
                         )
                         if continuation_text:
-                            buffered_body.append(continuation_text)
+                            if replace_buffered_body:
+                                buffered_body = [continuation_text]
+                            else:
+                                buffered_body.append(continuation_text)
                             continued_body_text = "".join(buffered_body)
-                            pseudo_tool_calls = _extract_pseudo_tool_calls(continued_body_text)
+                            pseudo_tool_calls = [] if replace_buffered_body else _extract_pseudo_tool_calls(continued_body_text)
                             if pseudo_tool_calls:
                                 saw_tool_calls = True
                                 logger.info(
@@ -504,7 +507,7 @@ async def _maybe_continue_incomplete_final_text(
     max_tokens: int | None,
     safety_settings: list[list] | None,
     generation_config_overrides: dict | None,
-) -> str:
+) -> tuple[str, bool]:
     """Try bounded text-only continuations when the final answer is visibly cut off.
 
     Some upstream model responses return finish_reason=stop after producing an
@@ -618,7 +621,7 @@ async def _maybe_continue_incomplete_final_text(
         )
 
     final_reason = _detect_incomplete_final_text(current_text)
-    if final_reason and continuations:
+    if final_reason:
         logger.warning(
             "OpenAI stream incomplete final text remains incomplete after repair: model=%s, reason=%s, chars=%d, repairs=%d",
             model,
@@ -626,7 +629,26 @@ async def _maybe_continue_incomplete_final_text(
             len(current_text),
             len(continuations),
         )
-    return "".join(continuations)
+        if _is_incomplete_pseudo_tool_call_reason(final_reason):
+            logger.warning(
+                "OpenAI stream suppressing unrepaired pseudo tool call text: model=%s, reason=%s, chars=%d",
+                model,
+                final_reason,
+                len(current_text),
+            )
+            return _unrepaired_pseudo_tool_call_notice(), True
+    return "".join(continuations), False
+
+
+def _is_incomplete_pseudo_tool_call_reason(reason: str) -> bool:
+    return reason in {"incomplete_pseudo_tool_call_tag", "unclosed_pseudo_tool_call"}
+
+
+def _unrepaired_pseudo_tool_call_notice() -> str:
+    return (
+        "模型生成了一个未完整的工具调用，系统已阻止将半截工具参数作为普通文本输出。"
+        "请重新发送“继续”，或让任务从最近一步重新执行。"
+    )
 
 
 def _join_repair_continuation(current_text: str, continuation_text: str) -> str:
@@ -643,7 +665,7 @@ def _join_repair_continuation(current_text: str, continuation_text: str) -> str:
 
 
 def _continuation_prompt(reason: str) -> str:
-    if reason in {"incomplete_pseudo_tool_call_tag", "unclosed_pseudo_tool_call"}:
+    if _is_incomplete_pseudo_tool_call_reason(reason):
         return (
             "上一个回答在文本形式的工具调用标签中途停止了。"
             f"检测原因：{reason}。"
