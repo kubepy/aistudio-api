@@ -59,6 +59,18 @@ def _build_cloakbrowser_args(
     )
     if extra_args:
         args.extend(extra_args)
+
+    # Support injecting browser flags from a systemd/user environment override.
+    # Keep this as an opt-in hook; do not force GPU flags in code because
+    # headless Chromium + Mesa/Steam Deck drivers may behave differently across
+    # updates and can break request capture/login flows.
+    import os
+    import shlex
+
+    env_args = os.getenv("AISTUDIO_CHROMIUM_EXTRA_ARGS")
+    if env_args:
+        args.extend(shlex.split(env_args))
+
     return args
 
 
