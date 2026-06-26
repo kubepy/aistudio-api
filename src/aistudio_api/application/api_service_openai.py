@@ -81,17 +81,11 @@ async def handle_chat(req: ChatRequest, client: AIStudioClient):
                             model=model,
                             is_image_model=model_defaults.is_image_model,
                         )
-                elif req.tools is not None and _request_field_set(req, "google_search") and req.google_search:
-                    from aistudio_api.infrastructure.gateway.request_rewriter import build_tools_from_names
-
-                    model_defaults = resolve_model_defaults(model)
-                    tools = list(tools or [])
-                    tools.extend(
-                        build_tools_from_names(
-                            ["google_search"],
-                            model=model,
-                            is_image_model=model_defaults.is_image_model,
-                        )
+                elif req.tools is not None and tools and request_options["google_search"] is True:
+                    logger.warning(
+                        "OpenAI google_search requested with explicit function tools; skipping builtin Google Search "
+                        "because AI Studio rejects mixed builtin tools and function calling without "
+                        "tool_config.include_server_side_tool_invocations"
                     )
 
                 logger.info(
@@ -490,6 +484,7 @@ def _is_context_summarization_request(capture_prompt: str) -> bool:
 
     prompt = capture_prompt.strip().lower()
     return "summarization agent" in prompt and "creating a context" in prompt
+
 
 
 async def _maybe_continue_incomplete_final_text(
