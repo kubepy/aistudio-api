@@ -167,10 +167,10 @@ def test_modify_body_applies_model_safety_defaults():
 
     body = json.loads(rewritten)
     assert body[2] == [
-        [None, None, 7, 4],
-        [None, None, 8, 4],
-        [None, None, 9, 4],
-        [None, None, 10, 4],
+        [None, None, 7, 5],
+        [None, None, 8, 5],
+        [None, None, 9, 5],
+        [None, None, 10, 5],
     ]
 
 
@@ -196,6 +196,58 @@ def test_modify_body_applies_image_model_defaults():
     assert body[2] is None
     assert body[3][14] == [2]
     assert body[3][16] == [1, None, None, 4]
+
+
+def test_modify_body_disables_thinking_only_for_gemini_25_flash_image():
+    original = json.dumps(
+        [
+            "models/original",
+            [[[[None, "old"]], "user"]],
+            None,
+            [None] * 27,
+            "!snap",
+            None,
+            None,
+        ]
+    )
+    rewritten = modify_body(
+        original,
+        model="models/gemini-2.5-flash-image",
+        prompt="hello",
+    )
+
+    body = json.loads(rewritten)
+    assert body[3][16] is None
+
+
+def test_modify_body_applies_temperature_and_top_p_to_image_models():
+    original = json.dumps(
+        [
+            "models/original",
+            [[[[None, "old"]], "user"]],
+            None,
+            [None, None, None, 128, 0.5, 0.8, 16] + [None] * 20,
+            "!snap",
+            None,
+            None,
+        ]
+    )
+    rewritten = modify_body(
+        original,
+        model="models/gemini-2.5-flash-image",
+        prompt="hello",
+        temperature=0.7,
+        top_p=0.9,
+        top_k=32,
+        max_tokens=2048,
+    )
+
+    body = json.loads(rewritten)
+    assert body[3][3] == 128
+    assert body[3][4] == 0.7
+    assert body[3][5] == 0.9
+    assert body[3][6] == 16
+    assert body[3][16] is None
 
 
 def test_modify_body_keeps_image_model_tools():

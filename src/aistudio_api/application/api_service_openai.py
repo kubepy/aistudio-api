@@ -151,6 +151,7 @@ async def handle_chat(req: ChatRequest, client: AIStudioClient):
                     thinking=output.thinking,
                     usage=output.usage,
                     function_calls=output.function_calls,
+                    images=getattr(output, "images", []),
                 )
             except UsageLimitExceeded as exc:
                 runtime_state.record(model, "rate_limited")
@@ -196,6 +197,8 @@ async def handle_image_generation(req: ImageRequest, client: AIStudioClient):
                     google_search=req.google_search,
                     image_search=req.image_search,
                     use_default_tools=not bool({"google_search", "image_search"} & req.model_fields_set),
+                    temperature=req.temperature,
+                    top_p=req.top_p,
                 )
                 record_rotator_event("success")
                 runtime_state.record(req.model, "success", output.usage)
@@ -230,6 +233,8 @@ async def handle_image_edit(
     model: str,
     n: int,
     size: str,
+    temperature: float | None,
+    top_p: float | None,
     client: AIStudioClient,
 ):
     validate_image_request_options(size=size, n=n)
@@ -256,6 +261,8 @@ async def handle_image_edit(
                     model=model,
                     size=size,
                     contents=request_contents,
+                    temperature=temperature,
+                    top_p=top_p,
                 )
                 record_rotator_event("success")
                 runtime_state.record(model, "success", output.usage)
@@ -344,6 +351,8 @@ def _build_streaming_response(
                                     yield sse_chunk(chat_id, model, text, include_usage=include_usage)
                             elif event_type == "thinking" and text:
                                 yield sse_chunk(chat_id, model, "", thinking=text, include_usage=include_usage)
+                            elif event_type == "images" and text:
+                                yield sse_chunk(chat_id, model, "", images=text, include_usage=include_usage)
                             elif event_type == "tool_calls" and text:
                                 saw_tool_calls = True
                                 tool_names = [

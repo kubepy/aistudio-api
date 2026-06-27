@@ -36,6 +36,7 @@ class OpenAIChatMessage(BaseModel):
     content: str
     thinking: str | None = None
     tool_calls: list[OpenAIToolCall] | None = None
+    images: list[dict[str, Any]] | None = None
 
 
 class OpenAIChatChoice(BaseModel):
@@ -58,6 +59,7 @@ class OpenAIChatDelta(BaseModel):
     content: str | None = None
     thinking: str | None = None
     tool_calls: list[OpenAIToolCall] | None = None
+    images: list[dict[str, Any]] | None = None
 
 
 class OpenAIChatChunkChoice(BaseModel):

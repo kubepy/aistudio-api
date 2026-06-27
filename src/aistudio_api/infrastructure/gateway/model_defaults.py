@@ -249,7 +249,13 @@ def _default_config() -> dict[str, Any]:
                     },
                 },
             ],
-            "models": {},
+            "models": {
+                "gemini-2.5-flash-image": {
+                    "default_tools": [],
+                    "generation_config_defaults": {"thinking_config": None},
+                    "clear_generation_config_indexes": [7, 13, 16, 17],
+                },
+            },
         }
     }
 

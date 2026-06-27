@@ -77,4 +77,15 @@ model_defaults:
   #     generation_config_defaults:
   #       image_output_mode: text_and_image
   #       media_resolution: HIGH
-  models: {}
+  models:
+    gemini-2.5-flash-image:
+      # This model has no thinking UI/support in AI Studio. Keep that as a
+      # model override instead of treating every image-capable model the same.
+      default_tools: []
+      generation_config_defaults:
+        thinking_config: null
+      clear_generation_config_indexes:
+        - 7
+        - 13
+        - 16
+        - 17

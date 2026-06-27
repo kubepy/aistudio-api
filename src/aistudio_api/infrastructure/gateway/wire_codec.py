@@ -153,6 +153,8 @@ class AistudioWireCodec:
             gc = body[self.GENERATION_CONFIG_INDEX]
             if isinstance(gc, list):
                 # Different image-capable models reject some text-model carry-over slots.
+                # Model-specific unsupported slots, such as gemini-2.5-flash-image's
+                # missing thinking_config, are configured via clear_generation_config_indexes.
                 for idx in model_defaults.clear_generation_config_indexes:
                     if idx < len(gc):
                         gc[idx] = None
@@ -215,15 +217,19 @@ class AistudioWireCodec:
         if safety_settings is not None:
             request.safety_settings = safety_settings
 
-        if max_tokens is not None:
-            request.generation_config.max_tokens = max_tokens
+        # AI Studio exposes temperature and Top P for gemini-2.5-flash-image.
+        # Apply those common sampling knobs for both text and image-capable models.
         if temperature is not None:
             request.generation_config.temperature = temperature
         if top_p is not None:
             request.generation_config.top_p = top_p
-        if top_k is not None:
-            request.generation_config.top_k = top_k
-        request.generation_config.enable_default_thinking()
+
+        if not model_defaults.is_image_model:
+            if max_tokens is not None:
+                request.generation_config.max_tokens = max_tokens
+            if top_k is not None:
+                request.generation_config.top_k = top_k
+            request.generation_config.enable_default_thinking()
 
         # OpenAI chat compatibility should not inherit browser-side structured output
         # or explicit reasoning settings from a previously captured AI Studio request.

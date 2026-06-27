@@ -33,6 +33,8 @@ def test_handle_image_edit_rejects_unsupported_size():
                 model="gemini-3.1-flash-image-preview",
                 n=1,
                 size="800x600",
+                temperature=None,
+                top_p=None,
                 client=_UnusedClient(),
             )
         )
@@ -40,6 +42,28 @@ def test_handle_image_edit_rejects_unsupported_size():
     assert exc.value.status_code == 400
     assert exc.value.detail["type"] == "invalid_request_error"
     assert exc.value.detail["message"] == "Unsupported image size '800x600'"
+
+
+def test_native_aistudio_aspect_ratio_aliases_are_supported():
+    from aistudio_api.application.api_service_common import validate_image_request_options
+    from aistudio_api.infrastructure.gateway.client import AIStudioClient
+
+    expected_aliases = {
+        "1:1": ["1:1", "1K"],
+        "9:16": ["9:16", "1K"],
+        "16:9": ["16:9", "1K"],
+        "3:4": ["3:4", "1K"],
+        "4:3": ["4:3", "1K"],
+        "3:2": ["3:2", "1K"],
+        "2:3": ["2:3", "1K"],
+        "5:4": ["5:4", "1K"],
+        "4:5": ["4:5", "1K"],
+        "21:9": ["21:9", "1K"],
+    }
+
+    for size, expected in expected_aliases.items():
+        validate_image_request_options(size=size, n=1)
+        assert AIStudioClient.resolve_image_size(size) == expected
 
 
 class _CaptureImageClient:
@@ -95,3 +119,22 @@ def test_handle_image_generation_allows_default_tools_when_search_flags_omitted(
 
     assert len(client.calls) == 1
     assert client.calls[0]["kwargs"]["use_default_tools"] is True
+
+def test_handle_image_generation_passes_sampling_options(monkeypatch):
+    from aistudio_api.application import api_service_openai
+
+    async def _noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(api_service_openai, "require_busy_lock", lambda: asyncio.Semaphore(1))
+    monkeypatch.setattr(api_service_openai, "ensure_active_account", _noop)
+    monkeypatch.setattr(api_service_openai, "record_rotator_event", lambda *args, **kwargs: None)
+
+    client = _CaptureImageClient()
+    req = ImageRequest(prompt="hello", temperature=0.7, top_p=0.9)
+
+    asyncio.run(handle_image_generation(req, client))
+
+    assert len(client.calls) == 1
+    assert client.calls[0]["kwargs"]["temperature"] == 0.7
+    assert client.calls[0]["kwargs"]["top_p"] == 0.9

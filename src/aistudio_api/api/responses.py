@@ -95,6 +95,18 @@ def to_gemini_usage_metadata(usage: dict | None = None) -> GeminiUsageMetadata:
     )
 
 
+def _openrouter_image_parts(images: list[GeneratedImage] | None) -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:{image.mime};base64,{base64.b64encode(image.data).decode('ascii')}",
+            },
+        }
+        for image in images or []
+    ]
+
+
 def sse_chunk(
     chat_id: str,
     model: str,
@@ -102,6 +114,7 @@ def sse_chunk(
     finish: str | None = None,
     thinking: str | None = None,
     tool_calls: list[dict[str, Any]] | None = None,
+    images: list[GeneratedImage] | None = None,
     include_usage: bool = True,
 ) -> str:
     data = OpenAIChatCompletionChunk(
@@ -115,6 +128,7 @@ def sse_chunk(
                     content=content or None,
                     thinking=thinking,
                     tool_calls=tool_calls,
+                    images=_openrouter_image_parts(images) or None,
                 ),
                 finish_reason=finish,
             )
@@ -318,8 +332,10 @@ def chat_completion_response(
     thinking: str = "",
     usage: dict | None = None,
     function_calls: list[dict[str, Any]] | None = None,
+    images: list[GeneratedImage] | None = None,
 ) -> OpenAIChatCompletionResponse:
     finish_reason = "tool_calls" if function_calls else "stop"
+    openrouter_images = _openrouter_image_parts(images)
     return OpenAIChatCompletionResponse(
         id=new_chat_id(),
         created=int(time.time()),
@@ -331,6 +347,7 @@ def chat_completion_response(
                     content=content,
                     thinking=thinking or None,
                     tool_calls=to_openai_tool_calls(function_calls) if function_calls else None,
+                    images=openrouter_images or None,
                 ),
                 finish_reason=finish_reason,
             )

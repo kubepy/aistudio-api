@@ -26,6 +26,22 @@ _snapshot_cache = SnapshotCache()
 
 class AIStudioClient:
     IMAGE_SIZE_TO_OUTPUT_RESOLUTION = {
+        # Native AI Studio web UI aspect-ratio aliases.
+        # See /var/home/deck/workspace/image.txt: Auto, 1:1, 9:16, 16:9,
+        # 3:4, 4:3, 3:2, 2:3, 5:4, 4:5, 21:9.
+        # Keep OpenAI-style aliases below for client compatibility, but prefer
+        # these native ratio strings when calling this local service directly.
+        "1:1": ["1:1", "1K"],
+        "9:16": ["9:16", "1K"],
+        "16:9": ["16:9", "1K"],
+        "3:4": ["3:4", "1K"],
+        "4:3": ["4:3", "1K"],
+        "3:2": ["3:2", "1K"],
+        "2:3": ["2:3", "1K"],
+        "5:4": ["5:4", "1K"],
+        "4:5": ["4:5", "1K"],
+        "21:9": ["21:9", "1K"],
+        # OpenAI-style compatibility aliases.
         # 1:1
         "512x512": ["1:1", "512"],
         "1024x1024": ["1:1", "1K"],
@@ -295,6 +311,8 @@ class AIStudioClient:
         use_default_tools: bool = True,
         images: Optional[list[str]] = None,
         contents: Optional[list[AistudioContent]] = None,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
     ) -> ModelOutput:
         logger.info("生图请求: %r, images=%s", f"{prompt[:20]}...", len(images) if images else 0)
         request_contents = contents or [self._build_user_content(prompt=prompt, images=images)]
@@ -329,6 +347,8 @@ class AIStudioClient:
             model=model,
             contents=request_contents,
             tools=resolved_tools,
+            temperature=temperature,
+            top_p=top_p,
             generation_config_overrides=generation_config_overrides,
         )
         status, raw = await self._replay_service.replay(captured, body=modified_body, timeout=120)

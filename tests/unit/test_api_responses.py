@@ -109,6 +109,25 @@ def test_chat_completion_response_maps_function_calls_to_openai_tool_calls():
     assert json.loads(choice.message.tool_calls[0].function.arguments) == {"city": "Shanghai"}
 
 
+def test_chat_completion_response_can_include_openrouter_style_images():
+    from aistudio_api.domain.models import GeneratedImage
+
+    response = chat_completion_response(
+        model="gemini-2.5-flash-image",
+        content="",
+        images=[GeneratedImage(mime="image/png", data=b"png-bytes", size=9)],
+    )
+
+    choice = response.choices[0]
+    assert choice.finish_reason == "stop"
+    assert choice.message.images == [
+        {
+            "type": "image_url",
+            "image_url": {"url": "data:image/png;base64,cG5nLWJ5dGVz"},
+        }
+    ]
+
+
 def test_sse_chunk_can_emit_tool_calls_delta():
     payload = sse_chunk(
         "chatcmpl-test",
@@ -126,6 +145,27 @@ def test_sse_chunk_can_emit_tool_calls_delta():
     data = json.loads(payload.removeprefix("data: ").strip())
 
     assert data["choices"][0]["delta"]["tool_calls"][0]["function"]["name"] == "getWeather"
+    assert data["usage"] is None
+
+
+def test_sse_chunk_can_emit_openrouter_style_image_delta():
+    from aistudio_api.domain.models import GeneratedImage
+
+    payload = sse_chunk(
+        "chatcmpl-test",
+        "gemini-2.5-flash-image",
+        "",
+        images=[GeneratedImage(mime="image/png", data=b"png-bytes", size=9)],
+        include_usage=True,
+    )
+    data = json.loads(payload.removeprefix("data: ").strip())
+
+    assert data["choices"][0]["delta"]["images"] == [
+        {
+            "type": "image_url",
+            "image_url": {"url": "data:image/png;base64,cG5nLWJ5dGVz"},
+        }
+    ]
     assert data["usage"] is None
 
 

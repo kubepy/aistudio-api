@@ -8,11 +8,28 @@ def test_resolve_model_defaults_uses_repo_config_for_gemma():
     assert defaults.default_tools == ("google_search",)
     assert defaults.is_image_model is False
     assert defaults.safety_settings == (
-        (None, None, 7, 4),
-        (None, None, 8, 4),
-        (None, None, 9, 4),
-        (None, None, 10, 4),
+        (None, None, 7, 5),
+        (None, None, 8, 5),
+        (None, None, 9, 5),
+        (None, None, 10, 5),
     )
+
+
+def test_resolve_model_defaults_disables_thinking_only_for_gemini_25_flash_image():
+    defaults = resolve_model_defaults("models/gemini-2.5-flash-image")
+
+    assert defaults.is_image_model is True
+    assert defaults.default_tools == ()
+    assert defaults.generation_config_defaults["thinking_config"] is None
+    assert defaults.clear_generation_config_indexes == (7, 13, 16, 17)
+
+
+def test_other_image_models_keep_profile_thinking_defaults():
+    defaults = resolve_model_defaults("models/gemini-3.1-flash-image-preview")
+
+    assert defaults.is_image_model is True
+    assert defaults.generation_config_defaults["thinking_config"] == [1, None, None, 4]
+    assert defaults.clear_generation_config_indexes == (7, 13, 17)
 
 
 def test_resolve_model_defaults_merges_yaml_profiles(tmp_path):

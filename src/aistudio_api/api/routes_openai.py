@@ -98,6 +98,8 @@ async def image_edits(
     model: str = Form("gemini-3.1-flash-image-preview"),
     n: int = Form(1),
     size: str = Form("1024x1024"),
+    temperature: float | None = Form(None),
+    top_p: float | None = Form(None),
     client: AIStudioClient = Depends(get_client),
 ):
     return await handle_image_edit(
@@ -107,5 +109,7 @@ async def image_edits(
         model=model,
         n=n,
         size=size,
+        temperature=temperature,
+        top_p=top_p,
         client=client,
     )

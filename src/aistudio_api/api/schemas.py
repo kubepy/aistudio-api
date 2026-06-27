@@ -68,6 +68,8 @@ class ImageRequest(BaseModel):
     size: str = "1024x1024"
     google_search: bool = False
     image_search: bool = False
+    temperature: Optional[float] = None
+    top_p: Optional[float] = None
 
 
 class ImageUrl(BaseModel):
