@@ -246,8 +246,8 @@ class BrowserSession:
 
         return await self._run_sync(_sync)
 
-    async def capture_template(self, model: str) -> dict[str, Any]:
-        return await self._run_sync(self._capture_template_sync, model)
+    async def capture_template(self, model: str, force_refresh: bool = False) -> dict[str, Any]:
+        return await self._run_sync(self._capture_template_sync, model, force_refresh)
 
     async def upload_images(self, image_paths: list[str]) -> list[str]:
         return await self._run_sync(self._upload_images_sync, image_paths)
@@ -748,9 +748,12 @@ class BrowserSession:
             page.remove_listener("request", on_request)
             self._restore_textarea_value_sync(textarea, original_text)
 
-    def _capture_template_sync(self, model: str) -> dict[str, Any]:
+    def _capture_template_sync(self, model: str, force_refresh: bool = False) -> dict[str, Any]:
         import time as _t
         _t0 = _t.time()
+        if force_refresh:
+            self._templates.pop(model, None)
+            self._bootstrap_template = None
         if model in self._templates:
             log.debug(f"[timing] template cached for {model}")
             return self._templates[model]

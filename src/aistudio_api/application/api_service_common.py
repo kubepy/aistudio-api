@@ -70,7 +70,18 @@ async def try_switch_account() -> bool:
         None,  # skip lock — caller already holds it
         keep_snapshot_cache=False,
     )
+    if result is not None and hasattr(client, "clear_capture_cache"):
+        client.clear_capture_cache()
     return result is not None
+
+
+def is_retryable_capture_error(exc: Exception) -> bool:
+    message = str(exc)
+    return (
+        "no captured URL available for replay" in message
+        or "无法拦截请求" in message
+        or "template capture timeout" in message
+    )
 
 
 def require_busy_lock():

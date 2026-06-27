@@ -138,3 +138,132 @@ def test_handle_image_generation_passes_sampling_options(monkeypatch):
     assert len(client.calls) == 1
     assert client.calls[0]["kwargs"]["temperature"] == 0.7
     assert client.calls[0]["kwargs"]["top_p"] == 0.9
+
+def test_handle_image_generation_force_refreshes_after_account_switch(monkeypatch):
+    from aistudio_api.application import api_service_openai
+    from aistudio_api.domain.errors import UsageLimitExceeded
+
+    async def _noop(*args, **kwargs):
+        return None
+
+    switch_calls = []
+
+    async def _switch():
+        switch_calls.append(True)
+        return True
+
+    monkeypatch.setattr(api_service_openai, "require_busy_lock", lambda: asyncio.Semaphore(1))
+    monkeypatch.setattr(api_service_openai, "ensure_active_account", _noop)
+    monkeypatch.setattr(api_service_openai, "record_rotator_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(api_service_openai, "try_switch_account", _switch)
+
+    class _Client:
+        def __init__(self):
+            self.calls = []
+
+        async def generate_image(self, *args, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                raise UsageLimitExceeded("limited")
+
+            class _Output:
+                images = []
+                text = ""
+                usage = None
+
+            return _Output()
+
+    client = _Client()
+    req = ImageRequest(prompt="hello")
+
+    asyncio.run(handle_image_generation(req, client))
+
+    assert len(switch_calls) == 1
+    assert len(client.calls) == 2
+    assert client.calls[0]["force_refresh_capture"] is False
+    assert client.calls[1]["force_refresh_capture"] is True
+
+
+def test_handle_image_generation_retries_capture_replay_error_with_force_refresh(monkeypatch):
+    from aistudio_api.application import api_service_openai
+    from aistudio_api.domain.errors import RequestError
+
+    async def _noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(api_service_openai, "require_busy_lock", lambda: asyncio.Semaphore(1))
+    monkeypatch.setattr(api_service_openai, "ensure_active_account", _noop)
+    monkeypatch.setattr(api_service_openai, "record_rotator_event", lambda *args, **kwargs: None)
+
+    class _Client:
+        def __init__(self):
+            self.calls = []
+
+        async def generate_image(self, *args, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                raise RequestError(0, "no captured URL available for replay")
+
+            class _Output:
+                images = []
+                text = ""
+                usage = None
+
+            return _Output()
+
+    client = _Client()
+    req = ImageRequest(prompt="hello")
+
+    asyncio.run(handle_image_generation(req, client))
+
+    assert len(client.calls) == 2
+    assert client.calls[0]["force_refresh_capture"] is False
+    assert client.calls[1]["force_refresh_capture"] is True
+
+def test_try_switch_account_clears_capture_cache(monkeypatch):
+    from aistudio_api.application import api_service_common
+    from aistudio_api.api.state import runtime_state
+
+    class _Account:
+        id = "acc_next"
+
+    class _Rotator:
+        async def get_next_account(self):
+            return _Account()
+
+    class _AccountService:
+        async def activate_account(self, account_id, session, snapshot_cache, busy_lock, keep_snapshot_cache):
+            assert account_id == "acc_next"
+            assert busy_lock is None
+            assert keep_snapshot_cache is False
+            return _Account()
+
+    class _Client:
+        def __init__(self):
+            self._session = object()
+            self.clear_calls = 0
+
+        def clear_capture_cache(self):
+            self.clear_calls += 1
+
+    client = _Client()
+    original = (
+        runtime_state.rotator,
+        runtime_state.account_service,
+        runtime_state.client,
+        runtime_state.snapshot_cache,
+    )
+    runtime_state.rotator = _Rotator()
+    runtime_state.account_service = _AccountService()
+    runtime_state.client = client
+    runtime_state.snapshot_cache = object()
+    try:
+        assert asyncio.run(api_service_common.try_switch_account()) is True
+        assert client.clear_calls == 1
+    finally:
+        (
+            runtime_state.rotator,
+            runtime_state.account_service,
+            runtime_state.client,
+            runtime_state.snapshot_cache,
+        ) = original

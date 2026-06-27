@@ -85,6 +85,10 @@ class AIStudioClient:
         """清除 snapshot 缓存。"""
         _snapshot_cache.clear()
 
+    def clear_capture_cache(self) -> None:
+        """清除捕获模板缓存，避免切号后复用旧账号的 replay template。"""
+        self._capture_service.clear_templates()
+
     def _dump_raw_exchange(
         self,
         *,
@@ -313,10 +317,17 @@ class AIStudioClient:
         contents: Optional[list[AistudioContent]] = None,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
+        force_refresh_capture: bool = False,
     ) -> ModelOutput:
         logger.info("生图请求: %r, images=%s", f"{prompt[:20]}...", len(images) if images else 0)
         request_contents = contents or [self._build_user_content(prompt=prompt, images=images)]
-        captured = await self.capture_request(prompt, model=model, images=images, contents=request_contents)
+        captured = await self.capture_request(
+            prompt,
+            model=model,
+            images=images,
+            contents=request_contents,
+            force_refresh=force_refresh_capture,
+        )
         if not captured:
             raise RequestError(0, "无法拦截请求")
 

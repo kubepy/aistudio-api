@@ -24,6 +24,7 @@ from aistudio_api.application.api_service_common import (
     build_inline_image_parts,
     ensure_active_account,
     image_response,
+    is_retryable_capture_error,
     logger,
     record_rotator_event,
     require_busy_lock,
@@ -184,6 +185,7 @@ async def handle_image_generation(req: ImageRequest, client: AIStudioClient):
 
     busy_lock = require_busy_lock()
     last_error = None
+    force_refresh_capture = False
 
     for attempt in range(MAX_RETRIES):
         async with busy_lock:
@@ -199,6 +201,7 @@ async def handle_image_generation(req: ImageRequest, client: AIStudioClient):
                     use_default_tools=not bool({"google_search", "image_search"} & req.model_fields_set),
                     temperature=req.temperature,
                     top_p=req.top_p,
+                    force_refresh_capture=force_refresh_capture,
                 )
                 record_rotator_event("success")
                 runtime_state.record(req.model, "success", output.usage)
@@ -209,6 +212,7 @@ async def handle_image_generation(req: ImageRequest, client: AIStudioClient):
 
                 record_rotator_event("rate_limited")
                 if await try_switch_account():
+                    force_refresh_capture = True
                     logger.info("Image 429 限流，已切换账号，重试 %d/%d", attempt + 1, MAX_RETRIES)
                     continue
                 logger.warning("Image 429 限流，无法切换账号")
@@ -216,6 +220,13 @@ async def handle_image_generation(req: ImageRequest, client: AIStudioClient):
             except AistudioError as exc:
                 runtime_state.record(req.model, "errors")
                 record_rotator_event("error")
+                if is_retryable_capture_error(exc) and attempt < MAX_RETRIES - 1:
+                    logger.warning(
+                        "Image capture/replay state invalid, force-refreshing capture and retrying: %s",
+                        exc,
+                    )
+                    force_refresh_capture = True
+                    continue
                 raise HTTPException(500, detail={"message": str(exc), "type": "server_error"}) from exc
             except Exception as exc:
                 runtime_state.record(req.model, "errors")
