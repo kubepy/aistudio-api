@@ -70,10 +70,12 @@ class AccountRotator:
         account_store: AccountStore,
         mode: RotationMode = RotationMode.ROUND_ROBIN,
         cooldown_seconds: int = 60,
+        disabled_account_ids: set[str] | frozenset[str] | None = None,
     ) -> None:
         self._store = account_store
         self._mode = mode
         self._cooldown_seconds = cooldown_seconds
+        self._disabled_account_ids: set[str] = set(disabled_account_ids or ())
         self._stats: dict[str, AccountStats] = {}
         self._current_index: int = 0
         self._lock = asyncio.Lock()
@@ -100,6 +102,19 @@ class AccountRotator:
     def cooldown_seconds(self, value: int) -> None:
         self._cooldown_seconds = value
 
+    @property
+    def disabled_account_ids(self) -> set[str]:
+        """账号轮询禁用列表。"""
+        return set(self._disabled_account_ids)
+
+    @disabled_account_ids.setter
+    def disabled_account_ids(self, value: set[str] | frozenset[str]) -> None:
+        self._disabled_account_ids = set(value)
+
+    def is_account_disabled(self, account_id: str) -> bool:
+        """检查账号是否被排除出自动使用范围。"""
+        return account_id in self._disabled_account_ids
+
     def get_all_stats(self) -> dict[str, dict[str, Any]]:
         """获取所有账号的统计信息。"""
         result = {}
@@ -108,20 +123,29 @@ class AccountRotator:
             result[account.id] = {
                 "name": account.name,
                 "email": account.email,
+                "is_disabled": account.id in self._disabled_account_ids,
                 "requests": stats.requests,
                 "success": stats.success,
                 "rate_limited": stats.rate_limited,
                 "errors": stats.errors,
                 "last_used": datetime.fromtimestamp(stats.last_used, tz=timezone.utc).isoformat() if stats.last_used else None,
                 "last_rate_limited": datetime.fromtimestamp(stats.last_rate_limited, tz=timezone.utc).isoformat() if stats.last_rate_limited else None,
-                "is_available": stats.is_available(),
+                "is_available": account.id not in self._disabled_account_ids and stats.is_available(),
                 "cooldown_remaining": max(0, int(stats.cooldown_until - time.time())),
             }
         return result
 
+    def _get_enabled_accounts(self) -> list[AccountMeta]:
+        """获取未被配置禁用的账号。"""
+        return [
+            account
+            for account in self._store.list_accounts()
+            if account.id not in self._disabled_account_ids
+        ]
+
     def _get_available_accounts(self) -> list[tuple[AccountMeta, AccountStats]]:
-        """获取所有可用的账号（不在冷却期）。"""
-        accounts = self._store.list_accounts()
+        """获取所有可用的账号（未禁用且不在冷却期）。"""
+        accounts = self._get_enabled_accounts()
         available = []
         for account in accounts:
             stats = self._stats.get(account.id, AccountStats(account_id=account.id))
@@ -134,7 +158,7 @@ class AccountRotator:
         if not available:
             return None
         available_ids = {a.id for a, _ in available}
-        all_accounts = self._store.list_accounts()
+        all_accounts = self._get_enabled_accounts()
         if not all_accounts:
             return None
         total = len(all_accounts)
@@ -164,7 +188,7 @@ class AccountRotator:
 
             if not available:
                 # 所有账号都在冷却期，找一个冷却时间最短的
-                all_accounts = self._store.list_accounts()
+                all_accounts = self._get_enabled_accounts()
                 if not all_accounts:
                     return None
                 # 选冷却结束最早的
@@ -200,7 +224,7 @@ class AccountRotator:
         async with self._lock:
             available = self._get_available_accounts()
             if not available:
-                all_accounts = self._store.list_accounts()
+                all_accounts = self._get_enabled_accounts()
                 if not all_accounts:
                     return None
                 earliest = min(

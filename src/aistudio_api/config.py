@@ -86,6 +86,20 @@ def _parse_api_keys(raw: str | None) -> tuple[str, ...]:
     return tuple(keys)
 
 
+def _parse_csv_env(raw: str | None) -> tuple[str, ...]:
+    """Parse comma/newline separated env values, preserving order and de-duping."""
+    if raw is None:
+        return ()
+
+    values: list[str] = []
+    for line in raw.splitlines():
+        for part in line.split(","):
+            value = part.strip()
+            if value and value not in values:
+                values.append(value)
+    return tuple(values)
+
+
 def _load_api_keys() -> frozenset[str]:
     values: list[str] = []
     for name in ("AISTUDIO_API_KEY", "AISTUDIO_API_KEYS"):
@@ -200,6 +214,9 @@ class Settings:
     account_rotation_mode: str = os.getenv("AISTUDIO_ACCOUNT_ROTATION_MODE", "round_robin")  # round_robin, lru, least_rl
     account_cooldown_seconds: int = int(os.getenv("AISTUDIO_ACCOUNT_COOLDOWN_SECONDS", "60"))
     account_max_retries: int = int(os.getenv("AISTUDIO_ACCOUNT_MAX_RETRIES", "3"))
+    account_disabled_ids: frozenset[str] = frozenset(
+        _parse_csv_env(_load_env("AISTUDIO_DISABLED_ACCOUNTS", "AISTUDIO_ACCOUNT_DISABLED_IDS"))
+    )
     max_concurrency: int = int(os.getenv("AISTUDIO_MAX_CONCURRENCY", "3"))
 
     # Defaults for OpenAI-compatible /v1/chat/completions requests.

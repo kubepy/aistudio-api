@@ -209,6 +209,7 @@ Configure via environment variables or a `.env` file:
 | `AISTUDIO_SNAPSHOT_CACHE_TTL` | `3600` | BotGuard snapshot cache duration (seconds) |
 | `AISTUDIO_ACCOUNT_ROTATION_MODE` | `round_robin` | Rotation mode: `round_robin`, `lru`, `least_rl` |
 | `AISTUDIO_ACCOUNT_COOLDOWN_SECONDS` | `60` | Cooldown duration after rate limit (seconds) |
+| `AISTUDIO_DISABLED_ACCOUNTS` | None | Account IDs excluded from automatic rotation, comma-separated |
 | `AISTUDIO_DUMP_RAW_RESPONSE` | `0` | Save raw responses to disk (for debugging) |
 
 ### Model Configuration

@@ -104,6 +104,7 @@ async def get_rotation_status(runtime_state=Depends(get_runtime_state)):
         "enabled": True,
         "mode": rotator.mode.value,
         "cooldown_seconds": rotator.cooldown_seconds,
+        "disabled_account_ids": sorted(rotator.disabled_account_ids),
         "accounts": rotator.get_all_stats(),
     }
 

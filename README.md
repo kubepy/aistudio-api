@@ -195,6 +195,7 @@ python3 main.py client "画一只猫" --image --save cat.png
 | `AISTUDIO_SNAPSHOT_CACHE_TTL` | `3600` | BotGuard snapshot 缓存时间 |
 | `AISTUDIO_ACCOUNT_ROTATION_MODE` | `round_robin` | 轮询模式：`round_robin`、`lru`、`least_rl` |
 | `AISTUDIO_ACCOUNT_COOLDOWN_SECONDS` | `60` | 限流后冷却时间 |
+| `AISTUDIO_DISABLED_ACCOUNTS` | 空 | 禁止参与自动轮询的账号 ID，多个用英文逗号分隔 |
 | `AISTUDIO_DUMP_RAW_RESPONSE` | `0` | 保存原始响应到磁盘（调试） |
 
 ### 模型配置

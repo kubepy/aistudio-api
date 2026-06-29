@@ -97,7 +97,20 @@ async def ensure_active_account(attempt: int) -> None:
     if attempt != 0:
         return
     account_svc = runtime_state.account_service
-    if account_svc and not account_svc.get_active_account():
+    if not account_svc:
+        return
+
+    account = account_svc.get_active_account()
+    rotator = runtime_state.rotator
+    if account and rotator and rotator.is_account_disabled(account.id):
+        if not await try_switch_account():
+            raise HTTPException(
+                503,
+                detail={"message": "No enabled AI Studio accounts available", "type": "service_unavailable"},
+            )
+        return
+
+    if not account:
         await try_switch_account()
 
 

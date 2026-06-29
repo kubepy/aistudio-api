@@ -55,19 +55,22 @@ async def lifespan(app: FastAPI):
     # 初始化账号轮询器
     rotation_mode = getattr(settings, "account_rotation_mode", "round_robin")
     cooldown = getattr(settings, "account_cooldown_seconds", 60)
+    disabled_account_ids = getattr(settings, "account_disabled_ids", frozenset())
     rotator = init_rotator(
         account_store,
         mode=RotationMode(rotation_mode),
         cooldown_seconds=cooldown,
+        disabled_account_ids=disabled_account_ids,
     )
     runtime_state.rotator = rotator
 
     logger.info(
-        "Client initialized (browser=%s, port=%s, rotation=%s, accounts=%d)",
+        "Client initialized (browser=%s, port=%s, rotation=%s, accounts=%d, disabled_accounts=%d)",
         settings.browser_engine,
         runtime_state.browser_port,
         rotator.mode,
         len(account_store.list_accounts()),
+        len(disabled_account_ids),
     )
 
     # 后台预热浏览器，避免首次请求延迟
