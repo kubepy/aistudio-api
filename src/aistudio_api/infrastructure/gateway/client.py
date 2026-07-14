@@ -27,8 +27,8 @@ _snapshot_cache = SnapshotCache()
 class AIStudioClient:
     IMAGE_SIZE_TO_OUTPUT_RESOLUTION = {
         # Native AI Studio web UI aspect-ratio aliases.
-        # See /var/home/deck/workspace/image.txt: Auto, 1:1, 9:16, 16:9,
-        # 3:4, 4:3, 3:2, 2:3, 5:4, 4:5, 21:9.
+        # Supported values: Auto, 1:1, 9:16, 16:9, 3:4, 4:3, 3:2, 2:3,
+        # 5:4, 4:5, and 21:9.
         # Keep OpenAI-style aliases below for client compatibility, but prefer
         # these native ratio strings when calling this local service directly.
         "1:1": ["1:1", "1K"],
