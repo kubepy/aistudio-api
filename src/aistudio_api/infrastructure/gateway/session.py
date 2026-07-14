@@ -29,7 +29,7 @@ from aistudio_api.infrastructure.gateway.wire_types import AistudioContent
 
 log = logging.getLogger("aistudio.session")
 
-AI_STUDIO_URL = "https://aistudio.google.com/prompts/new_chat?model=gemma-4-31b-it"
+AI_STUDIO_URL = "https://aistudio.google.com/prompts/new_chat?model=gemini-robotics-er-1.6-preview"
 AI_STUDIO_URL_FALLBACK = "https://aistudio.google.com/app/prompts/new_chat"
 GOOGLE_LOGIN_BOOTSTRAP_URL = (
     "https://accounts.google.com/ServiceLogin?continue=https://aistudio.google.com"

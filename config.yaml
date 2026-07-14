@@ -89,3 +89,12 @@ model_defaults:
         - 13
         - 16
         - 17
+    gemini-3.1-flash-lite-image:
+      default_tools: []
+      generation_config_defaults:
+        thinking_config: null
+      clear_generation_config_indexes:
+        - 7
+        - 13
+        - 16
+        - 17
