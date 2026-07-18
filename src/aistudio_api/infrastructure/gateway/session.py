@@ -133,6 +133,43 @@ DIALOG_CLEANUP_JS = """(() => {
     document.querySelectorAll('.cdk-overlay-container').forEach((node) => node.remove());
 })()"""
 
+# AI Studio currently renders an always-running animated upgrade card. In a
+# long-lived automation browser that animation continuously consumes renderer /
+# GPU-process CPU even while the API is idle. Install a narrowly scoped style
+# before every document loads instead of cancelling all page animations, which
+# could break loading indicators or controls used by the request flow.
+AI_STUDIO_LOW_POWER_UI_JS = r"""
+(() => {
+    const STYLE_ID = 'aistudio-api-low-power-ui';
+    const install = () => {
+        if (!document.documentElement || document.getElementById(STYLE_ID)) return;
+        const style = document.createElement('style');
+        style.id = STYLE_ID;
+        style.textContent = `
+            .upgrade-card-wrapper {
+                display: none !important;
+                animation: none !important;
+                transition: none !important;
+            }
+            .upgrade-card-wrapper *,
+            .upgrade-card-wrapper::before,
+            .upgrade-card-wrapper::after,
+            .upgrade-card-wrapper *::before,
+            .upgrade-card-wrapper *::after {
+                animation: none !important;
+                transition: none !important;
+            }
+        `;
+        document.documentElement.appendChild(style);
+    };
+
+    install();
+    if (!document.documentElement) {
+        document.addEventListener('DOMContentLoaded', install, { once: true });
+    }
+})();
+"""
+
 BOTGUARD_BOOTSTRAP_PROMPT = "say '1'"
 TEMPLATE_CAPTURE_PROMPT = "say 't'"
 
@@ -142,6 +179,19 @@ def _clear_worker_event_loop() -> None:
         asyncio.set_event_loop(None)
     except Exception:
         pass
+
+
+def _install_low_power_ui_sync(context: Any) -> None:
+    """Disable only AI Studio's decorative upgrade-card animation on each load."""
+    context.add_init_script(AI_STUDIO_LOW_POWER_UI_JS)
+
+
+def _low_power_ui_active_sync(page: Any) -> bool:
+    """Return whether the low-power style is present in the loaded document."""
+    try:
+        return bool(page.evaluate("!!document.getElementById('aistudio-api-low-power-ui')"))
+    except Exception:
+        return False
 
 
 class BrowserSession:
@@ -561,6 +611,7 @@ class BrowserSession:
         )
         self._browser = self._cf.__enter__()
         self._ctx = self._browser.new_context(**build_browser_context_options())
+        _install_low_power_ui_sync(self._ctx)
         self._apply_auth_file_sync()
         self._hook_page = self._ctx.pages[0] if self._ctx.pages else self._ctx.new_page()
         sync_maximize_page_window(self._hook_page)
@@ -588,12 +639,14 @@ class BrowserSession:
                 profile_dir,
                 **build_browser_context_options(),
             )
+            _install_low_power_ui_sync(self._ctx)
             self._browser = None
             self._cf = None
             self._playwright = None
         else:
             self._browser, self._cf, self._playwright = sync_launch_browser()
             self._ctx = self._browser.new_context(**build_browser_context_options())
+            _install_low_power_ui_sync(self._ctx)
 
         self._hook_page = self._ctx.pages[0] if self._ctx.pages else self._ctx.new_page()
         sync_maximize_page_window(self._hook_page)
@@ -1153,6 +1206,10 @@ mw:((hash) => {
                         f"Cookie 认证失败，已被重定向到 Google 登录页。"
                         f" (url={current_url})"
                     )
+                low_power_active = _low_power_ui_active_sync(page)
+                log.info("[low-power-ui] upgrade-card suppression active=%s", low_power_active)
+                if not low_power_active:
+                    log.warning("[low-power-ui] init style missing after AI Studio navigation")
                 # Wait for SPA framework and chat UI to render
                 for _ in range(60):
                     page.wait_for_timeout(1000)
