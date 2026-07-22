@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 from aistudio_api.api.schemas import ChatRequest
 from aistudio_api.application.api_service import handle_chat
@@ -405,6 +406,53 @@ with open(path, 'r', encoding='utf-8') as f:
             "args": {
                 "code": "\nimport json\n\npath = \"/var/home/deck/solutions.json\"\nwith open(path, 'r', encoding='utf-8') as f:\n    print(f.read(10))"
             },
+        }
+    ]
+
+
+def test_extract_pseudo_tool_call_recovers_json_with_literal_newlines():
+    from aistudio_api.application.api_service_openai import _extract_pseudo_tool_calls
+
+    raw_args = '{"command":"python3 -c \\"\nprint(1)\n\\""}'
+    text = f'<tool_call name="terminal">{raw_args}</tool_call>'
+
+    calls = _extract_pseudo_tool_calls(text)
+
+    assert calls == [
+        {
+            "name": "terminal",
+            "args": {"command": 'python3 -c "\nprint(1)\n"'},
+        }
+    ]
+
+
+def test_extract_pseudo_tool_call_unwraps_double_encoded_json_object():
+    from aistudio_api.application.api_service_openai import _extract_pseudo_tool_calls
+
+    encoded_args = json.dumps(json.dumps({"command": "printf OK"}))
+    text = f'<tool_call name="terminal">{encoded_args}</tool_call>'
+
+    calls = _extract_pseudo_tool_calls(text)
+
+    assert calls == [
+        {
+            "name": "terminal",
+            "args": {"command": "printf OK"},
+        }
+    ]
+
+
+def test_extract_pseudo_tool_call_preserves_plain_string_as_input():
+    from aistudio_api.application.api_service_openai import _extract_pseudo_tool_calls
+
+    text = '<tool_call name="example">"plain text"</tool_call>'
+
+    calls = _extract_pseudo_tool_calls(text)
+
+    assert calls == [
+        {
+            "name": "example",
+            "args": {"input": "plain text"},
         }
     ]
 

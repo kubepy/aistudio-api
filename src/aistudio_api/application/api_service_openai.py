@@ -1160,12 +1160,7 @@ def _extract_pseudo_tool_calls(text: str) -> list[dict]:
             continue
 
         raw_args = match.group(2).strip()
-        try:
-            args = json.loads(raw_args) if raw_args else {}
-        except json.JSONDecodeError:
-            args = {"input": raw_args}
-        if not isinstance(args, dict):
-            args = {"input": args}
+        args = _decode_pseudo_tool_args(raw_args)
 
         call: dict = {"name": name, "args": args}
         call_id = attrs.get("tool_call_id") or attrs.get("id") or attrs.get("call_id")
@@ -1196,6 +1191,47 @@ def _extract_pseudo_tool_calls(text: str) -> list[dict]:
         calls.append(call)
 
     return calls
+
+
+def _decode_pseudo_tool_args(raw_args: str) -> dict:
+    """Decode textual tool arguments, including common Gemini encoding drift.
+
+    Gemini may emit a pseudo tool-call body with literal control characters
+    inside JSON strings, or JSON-encode the entire arguments object one extra
+    time.  This fallback is intentionally limited to pseudo tool calls: parse
+    one outer value, unwrap at most one nested JSON string, and only promote a
+    decoded mapping to tool arguments.  Other scalar/list payloads retain the
+    historical ``input`` wrapper.
+    """
+
+    if not raw_args:
+        return {}
+
+    value: object = raw_args
+    try:
+        value = json.loads(raw_args)
+    except json.JSONDecodeError:
+        try:
+            value = json.loads(raw_args, strict=False)
+        except json.JSONDecodeError:
+            return {"input": raw_args}
+
+    if isinstance(value, str):
+        nested = value.strip()
+        if nested.startswith("{"):
+            try:
+                decoded = json.loads(nested)
+            except json.JSONDecodeError:
+                try:
+                    decoded = json.loads(nested, strict=False)
+                except json.JSONDecodeError:
+                    decoded = None
+            if isinstance(decoded, dict):
+                value = decoded
+
+    if isinstance(value, dict):
+        return value
+    return {"input": value}
 
 
 def _extract_pseudo_tool_call_attrs(text: str) -> list[dict[str, str]]:
